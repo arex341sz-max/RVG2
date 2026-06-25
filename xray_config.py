@@ -52,14 +52,17 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
     for uuid, link in snapshot.items():
         if not _is_allowed(link):
             continue
+
         protocol_name = link.get("protocol", "vless")
         stream = link.get("stream", "ws")
         tls = link.get("tls", True)
         port = link.get("xray_port") or assign_port(uuid)
+        sni = link.get("sni", "") or "localhost"
 
         try:
             import os
             cert_ok = os.path.exists("/data/certs/cert.pem") and os.path.exists("/data/certs/key.pem")
+            
             proto = get_protocol(protocol_name)
             inbound = proto.get_xray_inbound(
                 port=port,
@@ -67,13 +70,13 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
                 password=link.get("secret", uuid),
                 stream=stream,
                 tls=tls and cert_ok,
-                sni=link.get("sni", ""),
+                sni=sni,
                 **link.get("stream_params", {})
             )
             inbound["tag"] = f"in-{uuid[:8]}"
             inbounds.append(inbound)
         except Exception as e:
-            logger.warning(f"Skip {uuid[:8]}: {e}")
+            logger.warning(f"Skip inbound {uuid[:8]}: {e}")
 
     if not inbounds:
         inbounds = [{
@@ -85,7 +88,7 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
         }]
 
-    return {
+    config = {
         "log": {"loglevel": "warning"},
         "inbounds": inbounds,
         "outbounds": [
@@ -93,12 +96,14 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             {"protocol": "blackhole", "tag": "block"}
         ],
         "routing": {
+            "domainStrategy": "IPIfNonMatch",
             "rules": [
-                {"type": "field", "outboundTag": "block", "ip": ["geoip:private", "127.0.0.0/8"]},
+                {"type": "field", "outboundTag": "block", "ip": ["geoip:private", "127.0.0.0/8", "::1/128"]},
                 {"type": "field", "outboundTag": "direct", "network": "tcp,udp"}
             ]
         }
     }
+    return config
 
 
 async def write_xray_config() -> str:
@@ -107,10 +112,9 @@ async def write_xray_config() -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
-    logger.info(f"Xray config written: {len(config['inbounds'])} inbounds")
+    logger.info(f"📝 Xray config written: {len(config['inbounds'])} inbounds")
     return str(path)
 
 
-# این تابع حتما باید باشه
 def get_port_map() -> dict:
     return dict(_PORT_MAP)
