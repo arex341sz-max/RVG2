@@ -84,7 +84,6 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
         except Exception as e:
             logger.warning(f"Skip inbound {uuid[:8]}: {e}")
 
-    # ── FIX: اگه هیچ inbound فعالی نداشتیم placeholder بذار تا Xray با exit code 23 crash نکنه
     if not inbounds:
         logger.warning("⚠️  No active inbounds — adding placeholder to keep Xray alive")
         inbounds = [{
@@ -98,8 +97,8 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
     config = {
         "log": {
             "loglevel": "warning",
-            "access":   "/data/xray-access.log",
-            "error":    "/data/xray-error.log",
+            "access":   "",
+            "error":    "",
         },
         "inbounds": inbounds,
         "outbounds": [
