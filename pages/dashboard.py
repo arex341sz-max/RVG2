@@ -857,7 +857,7 @@ function renderLinks(){
         <button class="btn btn-sm btn-g" onclick="cpText(null,'${esc(linkUrl)}')" title="کپی لینک"><i class="ti ti-copy"></i></button>
         <button class="btn btn-sm btn-g" onclick="qrFor(null,'${esc(linkUrl)}')" title="QR"><i class="ti ti-qrcode"></i></button>
         <button class="btn btn-sm btn-g" onclick="window.open('/sub/${l.uuid}')" title="سابسکریپشن"><i class="ti ti-rss"></i></button>
-        <button class="btn btn-sm btn-g" onclick="window.open('/api/links/${l.uuid}/xray-config')" title="دانلود Xray"><i class="ti ti-download"></i></button>
+        <button class="btn btn-sm btn-g" onclick="toast('این قابلیت در نسخه بعدی اضافه میشه','')" title="دانلود Xray config"><i class="ti ti-download"></i></button>
         <button class="btn btn-sm btn-o" onclick="toggleLink('${l.uuid}',${!l.active})" title="${l.active?'غیرفعال':'فعال'}"><i class="ti ti-${l.active?'player-pause':'player-play'}"></i></button>
         <button class="btn btn-sm btn-o" onclick="resetUsage('${l.uuid}')" title="ریست مصرف"><i class="ti ti-refresh"></i></button>
         <button class="btn btn-sm btn-d" onclick="deleteLink('${l.uuid}')"><i class="ti ti-trash"></i></button>
@@ -985,22 +985,23 @@ function renderSubSelect(){
 async function refreshAll(){
   try{
     const[sR,lR,subR]=await Promise.all([fetch('/stats'),fetch('/api/links'),fetch('/api/subs')]);
-    if(!sR.ok||!lR.ok||!subR.ok){
-      if(sR.status===401||lR.status===401)return location.href='/login';
-      throw new Error('HTTP '+sR.status);
-    }
-    STATS=await sR.json();ALL_LINKS=(await lR.json()).links||[];ALL_SUBS=(await subR.json()).subs||[];
+    if(sR.status===401||lR.status===401||subR.status===401)return location.href='/login';
+    if(!sR.ok)throw new Error('stats: HTTP '+sR.status);
+    if(!lR.ok)throw new Error('links: HTTP '+lR.status);
+    if(!subR.ok)throw new Error('subs: HTTP '+subR.status);
+    const [statsJson, linksJson, subsJson] = await Promise.all([sR.json(), lR.json(), subR.json()]);
+    STATS=statsJson; ALL_LINKS=linksJson.links||[]; ALL_SUBS=subsJson.subs||[];
     renderLinks();renderSubs();renderSubGroupsList();renderSubSelect();renderOverview(STATS,ALL_LINKS);
   }catch(e){console.error('refreshAll error:',e);toast('خطا در بارگذاری: '+e.message,'err')}
 }
 
 // ─── Init ────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',async()=>{
-  checkAuth();
-  await loadProtocols();
-  initCharts();
-  // sidebar nav
+  try{await checkAuth();}catch(e){return;}
+  // sidebar nav - اول event listener ها رو وصل کن
   document.querySelectorAll('.nav-it[data-pg]').forEach(n=>n.addEventListener('click',()=>navTo(n.dataset.pg)));
+  try{await loadProtocols();}catch(e){console.error('loadProtocols error:',e);}
+  try{initCharts();}catch(e){console.error('initCharts error:',e);}
   // mobile
   document.getElementById('open-sb').addEventListener('click',()=>{document.getElementById('sb').classList.add('open');document.getElementById('overlay').classList.add('show')});
   document.getElementById('close-sb').addEventListener('click',()=>{document.getElementById('sb').classList.remove('open');document.getElementById('overlay').classList.remove('show')});
