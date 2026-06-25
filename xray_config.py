@@ -74,13 +74,15 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
         link["xray_port"] = port
 
         try:
+            import os
+            cert_ok = os.path.exists("/data/certs/cert.pem") and os.path.exists("/data/certs/key.pem")
             proto   = get_protocol(protocol_name)
             inbound = proto.get_xray_inbound(
                 port=port,
                 uuid=uuid,
                 password=secret,
                 stream=stream,
-                tls=tls,
+                tls=tls and cert_ok,   # اگه cert نباشه TLS غیرفعال
                 sni=link.get("sni", ""),
                 reality=link.get("reality", False),
                 reality_pbk=link.get("reality_pbk", ""),
