@@ -101,9 +101,9 @@ class TrojanProtocol(BaseProtocol):
         return f"trojan://{password}@{host}:{port}?{q}#{quote(remark)}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        password = kw.get("password", "")
-        stream   = kw.get("stream", "ws")
-        tls      = kw.get("tls", True)
+        password = kw.pop("password", "")
+        stream   = kw.pop("stream", "ws")
+        tls      = kw.pop("tls", True)
         return {
             "listen": "127.0.0.1",
             "port":   port,
