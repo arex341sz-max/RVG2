@@ -1,4 +1,4 @@
-"""xray_config.py — نسخه تمیز و بدون خطا"""
+"""xray_config.py — نسخه ساده و پایدار"""
 import json
 import logging
 from pathlib import Path
@@ -53,13 +53,13 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
         if not _is_allowed(link):
             continue
 
-        protocol_name = link.get("protocol", "vless")
-        stream = link.get("stream", "ws")
-        tls = link.get("tls", True)
-        port = link.get("xray_port") or assign_port(uuid)
-        sni = link.get("sni") or "localhost"
-
         try:
+            protocol_name = link.get("protocol", "vless")
+            stream = link.get("stream", "ws")
+            tls = link.get("tls", True)
+            port = link.get("xray_port") or assign_port(uuid)
+            sni = link.get("sni") or "localhost"
+
             proto = get_protocol(protocol_name)
             inbound = proto.get_xray_inbound(
                 port=port,
@@ -73,10 +73,10 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             inbound["tag"] = f"in-{uuid[:8]}"
             inbounds.append(inbound)
         except Exception as e:
-            logger.warning(f"Skip inbound {uuid[:8]}: {e}")
+            logger.warning(f"Skip {uuid[:8]}: {e}")
 
+    # Placeholder مطمئن
     if not inbounds:
-        logger.warning("Using placeholder inbound")
         inbounds = [{
             "tag": "placeholder",
             "listen": "127.0.0.1",
@@ -108,11 +108,9 @@ async def write_xray_config() -> str:
     config = await build_xray_config()
     path = Path(XRAY_MAIN_CFG)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
-    
-    logger.info(f"✅ Xray config written successfully: {len(config['inbounds'])} inbounds")
+    logger.info(f"✅ Xray config written: {len(config.get('inbounds', []))} inbounds")
     return str(path)
 
 
