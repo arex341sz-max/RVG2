@@ -104,9 +104,9 @@ class VLESSProtocol(BaseProtocol):
 
     # ── Xray inbound ────────────────────────────────────────────────────────
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        uuid   = kw.get("uuid", "")
-        stream = kw.get("stream", "ws")
-        tls    = kw.get("tls", True)
+        uuid   = kw.pop("uuid", "")
+        stream = kw.pop("stream", "ws")
+        tls    = kw.pop("tls", True)
         return {
             "listen": "127.0.0.1",      # فقط localhost — Railway پورت رو expose نمی‌کنه
             "port":   port,
