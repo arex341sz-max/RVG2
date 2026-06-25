@@ -1,4 +1,3 @@
-
 try:
     from pages_legacy import DASHBOARD_HTML as HTML
 except ImportError:
@@ -218,6 +217,7 @@ a{color:inherit;text-decoration:none}
 .sub-card-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .sub-meta-item{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t3)}
 .sub-meta-item i{font-size:12px}
+.sub-meta-item{font-size:10.5px;color:var(--t3);display:flex;align-items:center;gap:4px;background:var(--accent-d);padding:3px 8px;border-radius:6px}
 .sub-card-footer{display:flex;gap:6px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--card-b)}
 .pub-url-box{background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:10px 13px;display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 .pub-url-text{font-family:ui-monospace,monospace;font-size:10px;color:#A78BFA;word-break:break-all;flex:1}
@@ -333,11 +333,12 @@ a{color:inherit;text-decoration:none}
       <button class="btn btn-p btn-sm" onclick="refreshAll()"><i class="ti ti-refresh"></i> رفرش</button>
     </div>
   </div>
-  <div class="metrics">
+  <div class="metrics" style="grid-template-columns:repeat(5,1fr)">
     <div class="metric"><div class="m-icon"><i class="ti ti-plug-connected"></i></div><div class="m-label">اتصالات فعال</div><div class="m-val" id="m-conns">—</div><div class="m-sub"><span class="dot dg pulse"></span> WebSocket زنده</div></div>
     <div class="metric"><div class="m-icon"><i class="ti ti-transfer"></i></div><div class="m-label">کل ترافیک</div><div class="m-val" id="m-traffic">—<span class="m-unit">MB</span></div><div class="m-sub">از راه‌اندازی</div></div>
     <div class="metric suc"><div class="m-icon suc"><i class="ti ti-link"></i></div><div class="m-label">کانفیگ فعال</div><div class="m-val" id="m-alinks">—</div><div class="m-sub" id="m-lsub">از کل</div></div>
     <div class="metric pur"><div class="m-icon pur"><i class="ti ti-folders"></i></div><div class="m-label">گروه‌های ساب</div><div class="m-val" id="m-subs">—</div><div class="m-sub">فعال</div></div>
+    <div class="metric" id="m-xray-card"><div class="m-icon"><i class="ti ti-engine"></i></div><div class="m-label">Xray Core</div><div class="m-val" id="m-xray">—</div><div class="m-sub" id="m-xray-sub">در حال بررسی...</div></div>
   </div>
   <div class="vless-box">
     <div class="vl-header">
@@ -841,7 +842,7 @@ function initCharts(){
 // ─── Render ──────────────────────────────────────────────────────
 function renderLinks(){
   const tb=document.getElementById('links-tb');
-  if(!ALL_LINKS.length){tb.innerHTML='';document.getElementById('links-empty').style.display='';return;}
+  if(!ALL_LINKS.length){tb.innerHTML='';document.getElementById('links-empty').style.display='block';return;}
   document.getElementById('links-empty').style.display='none';
   tb.innerHTML=ALL_LINKS.map(l=>{
     const linkUrl=l.link_url||'';
@@ -898,6 +899,7 @@ function renderSubGroupsList(){
 }
 
 function renderOverview(s,l){
+try{
   document.getElementById('m-conns').textContent=toFa(s.active_connections);
   document.getElementById('m-traffic').innerHTML=toFa(s.total_traffic_mb)+'<span class="m-unit">MB</span>';
   document.getElementById('m-alinks').textContent=toFa(s.active_links);
@@ -912,13 +914,11 @@ function renderOverview(s,l){
   document.getElementById('links-pg-cnt').textContent=toFa(s.links_count)+' کانفیگ';
   document.getElementById('subs-pg-cnt').textContent=toFa(s.subs_count)+' گروه';
   document.getElementById('conns-live').textContent=toFa(s.active_connections)+' فعال';
-  if(s.xray?.running) {
-     document.getElementById('m-xray').innerHTML = '<span style="color:var(--green-t)">فعال</span>';
-     document.getElementById('m-xray-sub').textContent = 'PID ' + s.xray.pid;
-   } else {
-    document.getElementById('m-xray').innerHTML = '<span style="color:var(--red-t)">متوقف</span>';
-    document.getElementById('m-xray-sub').textContent = 'restart خودکار...';
-}
+  const mxray=document.getElementById('m-xray');const mxraysub=document.getElementById('m-xray-sub');
+  if(mxray){
+    if(s.xray?.running){mxray.innerHTML='<span style="color:var(--green-t)">فعال</span>';if(mxraysub)mxraysub.textContent='PID '+s.xray.pid;}
+    else{mxray.innerHTML='<span style="color:var(--red-t)">متوقف</span>';if(mxraysub)mxraysub.textContent='restart خودکار...';}
+  }
 
   // default link
   const defLink=l.find(x=>x.is_default);
@@ -970,6 +970,7 @@ function renderOverview(s,l){
   const bw=Math.min(100,Math.random()*30+5);
   document.getElementById('bw-pct').textContent=toFa(bw.toFixed(0))+'%';
   document.getElementById('bw-bar').style.width=bw+'%';
+}catch(err){console.error('renderOverview error:',err);}
 }
 
 function renderSubSelect(){
@@ -984,9 +985,13 @@ function renderSubSelect(){
 async function refreshAll(){
   try{
     const[sR,lR,subR]=await Promise.all([fetch('/stats'),fetch('/api/links'),fetch('/api/subs')]);
+    if(!sR.ok||!lR.ok||!subR.ok){
+      if(sR.status===401||lR.status===401)return location.href='/login';
+      throw new Error('HTTP '+sR.status);
+    }
     STATS=await sR.json();ALL_LINKS=(await lR.json()).links||[];ALL_SUBS=(await subR.json()).subs||[];
     renderLinks();renderSubs();renderSubGroupsList();renderSubSelect();renderOverview(STATS,ALL_LINKS);
-  }catch(e){console.error(e);toast('خطا در بارگذاری','err')}
+  }catch(e){console.error('refreshAll error:',e);toast('خطا در بارگذاری: '+e.message,'err')}
 }
 
 // ─── Init ────────────────────────────────────────────────────────
