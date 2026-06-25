@@ -1,7 +1,8 @@
-"""xray_config.py — نسخه بسیار ساده و پایدار"""
+"""xray_config.py — نسخه نهایی ساده"""
 import json
 import logging
 from pathlib import Path
+from datetime import datetime
 
 from config    import XRAY_MAIN_CFG, XRAY_PORT_BASE
 from state     import LINKS, LINKS_LOCK
@@ -12,10 +13,8 @@ logger = logging.getLogger("RVG.xray_config")
 _PORT_MAP = {}
 _NEXT_PORT = XRAY_PORT_BASE
 
-
 def get_port_map():
     return dict(_PORT_MAP)
-
 
 async def build_xray_config():
     async with LINKS_LOCK:
@@ -28,7 +27,7 @@ async def build_xray_config():
         try:
             proto = get_protocol(link.get("protocol", "vless"))
             inbound = proto.get_xray_inbound(
-                port=10000,  # پورت ثابت برای تست
+                port=10000,
                 uuid=uuid,
                 password=link.get("secret", uuid),
                 stream=link.get("stream", "ws"),
@@ -38,7 +37,7 @@ async def build_xray_config():
             inbound["tag"] = f"in-{uuid[:8]}"
             inbounds.append(inbound)
         except Exception as e:
-            logger.warning(f"Skip {uuid}: {e}")
+            logger.warning(f"Skip inbound: {e}")
 
     if not inbounds:
         inbounds = [{
@@ -46,11 +45,11 @@ async def build_xray_config():
             "listen": "127.0.0.1",
             "port": 10000,
             "protocol": "dokodemo-door",
-            "settings": {"address": "127.0.0.1", "port": 1},
-            "sniffing": {"enabled": True}
+            "settings": {"address": "127.0.0.1", "port": 1, "network": "tcp"},
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
         }]
 
-    config = {
+    return {
         "log": {"loglevel": "warning"},
         "inbounds": inbounds,
         "outbounds": [
@@ -64,7 +63,6 @@ async def build_xray_config():
             ]
         }
     }
-    return config
 
 
 async def write_xray_config():
