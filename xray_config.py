@@ -1,10 +1,10 @@
-"""xray_config.py — تولید config برای Xray"""
+"""xray_config.py"""
 import json
 import logging
 from pathlib import Path
 from datetime import datetime
 
-from config    import XRAY_MAIN_CFG, XRAY_PORT_BASE
+from config    import XRAY_MAIN_CFG, XRAY_PORT_BASE, XRAY_PORT_MAX
 from state     import LINKS, LINKS_LOCK
 from protocols import get_protocol
 
@@ -21,7 +21,7 @@ def assign_port(uuid: str) -> int:
     port = _NEXT_PORT
     _PORT_MAP[uuid] = port
     _NEXT_PORT += 1
-    if _NEXT_PORT > 19999:
+    if _NEXT_PORT > XRAY_PORT_MAX:
         _NEXT_PORT = XRAY_PORT_BASE
     return port
 
@@ -36,6 +36,9 @@ def _is_allowed(link: dict) -> bool:
                 return False
         except:
             pass
+    lb = link.get("limit_bytes", 0)
+    if lb > 0 and link.get("used_bytes", 0) >= lb:
+        return False
     return True
 
 
@@ -49,7 +52,6 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
     for uuid, link in snapshot.items():
         if not _is_allowed(link):
             continue
-
         protocol_name = link.get("protocol", "vless")
         stream = link.get("stream", "ws")
         tls = link.get("tls", True)
@@ -58,7 +60,6 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
         try:
             import os
             cert_ok = os.path.exists("/data/certs/cert.pem") and os.path.exists("/data/certs/key.pem")
-            
             proto = get_protocol(protocol_name)
             inbound = proto.get_xray_inbound(
                 port=port,
@@ -72,11 +73,9 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             inbound["tag"] = f"in-{uuid[:8]}"
             inbounds.append(inbound)
         except Exception as e:
-            logger.warning(f"Skip inbound {uuid[:8]}: {e}")
+            logger.warning(f"Skip {uuid[:8]}: {e}")
 
-    # Placeholder قوی‌تر
     if not inbounds:
-        logger.warning("No active inbounds — using safe placeholder")
         inbounds = [{
             "tag": "placeholder",
             "listen": "127.0.0.1",
@@ -86,7 +85,7 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
         }]
 
-    config = {
+    return {
         "log": {"loglevel": "warning"},
         "inbounds": inbounds,
         "outbounds": [
@@ -100,16 +99,18 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             ]
         }
     }
-    return config
 
 
 async def write_xray_config() -> str:
     config = await build_xray_config()
     path = Path(XRAY_MAIN_CFG)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
-    
     logger.info(f"Xray config written: {len(config['inbounds'])} inbounds")
     return str(path)
+
+
+# این تابع حتما باید باشه
+def get_port_map() -> dict:
+    return dict(_PORT_MAP)
