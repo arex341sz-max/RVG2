@@ -1,4 +1,10 @@
-LOGIN_HTML = r"""<!DOCTYPE html>
+# pages/login.py
+# محتوای LOGIN_HTML از pages.py قبلی — اینجا import می‌شه
+# برای جلوگیری از حجم زیاد، از pages.py قدیمی کپی کن:
+#   HTML = LOGIN_HTML  (از pages.py قبلی)
+
+# نمونه ساده برای تست:
+HTML = r"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
