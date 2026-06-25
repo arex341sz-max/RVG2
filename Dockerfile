@@ -1,23 +1,15 @@
-FROM python:3.13-slim
+FROM python:3.12-slim
 
-# ── System deps ───────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl wget unzip ca-certificates \
+    curl wget unzip ca-certificates openssl \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Xray binary ───────────────────────────────────────────────────────────────
-# دانلود آخرین نسخه Xray-core
+# Xray
 ARG XRAY_VERSION=v25.1.30
-ARG TARGETARCH=64
+RUN wget -q https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip -O /tmp/xray.zip && \
+    unzip -q /tmp/xray.zip -d /tmp && mv /tmp/xray /usr/local/bin/xray && chmod +x /usr/local/bin/xray && rm -rf /tmp/*
 
-RUN set -e \
-    && XRAY_ZIP="Xray-linux-${TARGETARCH}.zip" \
-    && wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/${XRAY_ZIP}" -O /tmp/xray.zip \
-    && unzip -q /tmp/xray.zip -d /tmp/xray \
-    && mv /tmp/xray/xray /usr/local/bin/xray \
-    && chmod +x /usr/local/bin/xray \
-    && rm -rf /tmp/xray /tmp/xray.zip \
-    && xray version
+# بقیه مثل قبل...
 
 # ── Python deps ───────────────────────────────────────────────────────────────
 WORKDIR /app
