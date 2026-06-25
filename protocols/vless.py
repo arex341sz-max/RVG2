@@ -22,12 +22,7 @@ class VLESSProtocol(BaseProtocol):
                 {"key": "host", "label": "Host", "placeholder": "example.com", "default": ""},
             ],
         },
-        "tcp": {
-            "label": "TCP",
-            "icon": "ti-arrows-transfer-down",
-            "desc": "مستقیم و سریع",
-            "params": [],
-        },
+        "tcp": {"label": "TCP", "icon": "ti-arrows-transfer-down", "desc": "مستقیم و سریع", "params": []},
         "grpc": {
             "label": "gRPC",
             "icon": "ti-binary-tree-2",
@@ -53,8 +48,7 @@ class VLESSProtocol(BaseProtocol):
             "params": [
                 {"key": "path", "label": "مسیر", "placeholder": "/xhttp", "default": "/xhttp"},
                 {"key": "host", "label": "Host", "placeholder": "example.com", "default": ""},
-                {"key": "mode", "label": "Mode", "type": "select",
-                 "options": ["auto", "packet-up"], "default": "auto"},
+                {"key": "mode", "label": "Mode", "type": "select", "options": ["auto", "packet-up"], "default": "auto"},
             ],
         },
         "mkcp": {
@@ -91,7 +85,7 @@ class VLESSProtocol(BaseProtocol):
         uuid = kw.pop("uuid", "")
         stream = kw.pop("stream", "ws")
         tls = kw.pop("tls", True)
-        sni = kw.get("sni", "localhost") or "localhost"
+        sni = kw.pop("sni", "localhost") or "localhost"   # جلوگیری از duplicate
 
         return {
             "listen": "127.0.0.1",
@@ -160,12 +154,7 @@ class VLESSProtocol(BaseProtocol):
             ss["security"] = "tls"
             ss["tlsSettings"] = {
                 "serverName": sni,
-                "certificates": [
-                    {
-                        "certificateFile": "/data/certs/cert.pem",
-                        "keyFile": "/data/certs/key.pem"
-                    }
-                ],
+                "certificates": [{"certificateFile": "/data/certs/cert.pem", "keyFile": "/data/certs/key.pem"}],
                 "alpn": ["http/1.1"]
             }
         return ss
