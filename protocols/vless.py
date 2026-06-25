@@ -18,8 +18,8 @@ class VLESSProtocol(BaseProtocol):
             "icon": "ti-webhook",
             "desc": "عبور از فایروال با هدر HTTP",
             "params": [
-                {"key": "path",  "label": "مسیر", "placeholder": "/ws",         "default": "/ws"},
-                {"key": "host",  "label": "Host",  "placeholder": "example.com", "default": ""},
+                {"key": "path", "label": "مسیر", "placeholder": "/ws", "default": "/ws"},
+                {"key": "host", "label": "Host", "placeholder": "example.com", "default": ""},
             ],
         },
         "tcp": {
@@ -33,8 +33,8 @@ class VLESSProtocol(BaseProtocol):
             "icon": "ti-binary-tree-2",
             "desc": "HTTP/2 multiplexing",
             "params": [
-                {"key": "serviceName", "label": "Service Name", "placeholder": "grpc",  "default": "grpc"},
-                {"key": "multiMode",   "label": "Multi Mode",   "type": "bool",         "default": True},
+                {"key": "serviceName", "label": "Service Name", "placeholder": "grpc", "default": "grpc"},
+                {"key": "multiMode", "label": "Multi Mode", "type": "bool", "default": True},
             ],
         },
         "httpupgrade": {
@@ -43,7 +43,7 @@ class VLESSProtocol(BaseProtocol):
             "desc": "ارتقای اتصال HTTP",
             "params": [
                 {"key": "path", "label": "مسیر", "placeholder": "/upgrade", "default": "/upgrade"},
-                {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
+                {"key": "host", "label": "Host", "placeholder": "example.com", "default": ""},
             ],
         },
         "xhttp": {
@@ -52,8 +52,8 @@ class VLESSProtocol(BaseProtocol):
             "desc": "جداسازی GET/POST — مقاوم بالا",
             "params": [
                 {"key": "path", "label": "مسیر", "placeholder": "/xhttp", "default": "/xhttp"},
-                {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
-                {"key": "mode", "label": "Mode",  "type": "select",
+                {"key": "host", "label": "Host", "placeholder": "example.com", "default": ""},
+                {"key": "mode", "label": "Mode", "type": "select",
                  "options": ["auto", "packet-up"], "default": "auto"},
             ],
         },
@@ -62,33 +62,18 @@ class VLESSProtocol(BaseProtocol):
             "icon": "ti-bolt",
             "desc": "بر اساس UDP — مناسب افت پکت",
             "params": [
-                {"key": "seed",       "label": "Seed",              "placeholder": "رندوم", "default": ""},
-                {"key": "header",     "label": "Header Type",       "type": "select",
+                {"key": "seed", "label": "Seed", "placeholder": "رندوم", "default": ""},
+                {"key": "header", "label": "Header Type", "type": "select",
                  "options": ["none","srtp","utp","wechat-video","dtls","wireguard"], "default": "none"},
                 {"key": "congestion", "label": "Congestion Control","type": "bool", "default": False},
             ],
         },
     }
 
-    # ── Link generation ──────────────────────────────────────────────────────
-    def generate_link(
-        self,
-        uuid: str,
-        host: str,
-        port: int,
-        stream: str = "ws",
-        tls: bool = True,
-        sni: str = "",
-        fingerprint: str = "chrome",
-        alpn: str = "http/1.1",
-        remark: str = "RVG",
-        reality: bool = False,
-        reality_pbk: str = "",
-        reality_sid: str = "",
-        reality_sni: str = "",
-        reality_fingerprint: str = "chrome",
-        **sp,
-    ) -> str:
+    def generate_link(self, uuid: str, host: str, port: int, stream: str = "ws", tls: bool = True,
+                      sni: str = "", fingerprint: str = "chrome", alpn: str = "http/1.1", remark: str = "RVG",
+                      reality: bool = False, reality_pbk: str = "", reality_sid: str = "",
+                      reality_sni: str = "", reality_fingerprint: str = "chrome", **sp) -> str:
         p = {"encryption": "none"}
         if reality:
             p.update(security="reality", pbk=reality_pbk, sid=reality_sid,
@@ -102,24 +87,24 @@ class VLESSProtocol(BaseProtocol):
         q = "&".join(f"{k}={quote(str(v))}" for k, v in p.items())
         return f"vless://{uuid}@{host}:{port}?{q}#{quote(remark)}"
 
-    # ── Xray inbound ────────────────────────────────────────────────────────
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        uuid   = kw.pop("uuid", "")
+        uuid = kw.pop("uuid", "")
         stream = kw.pop("stream", "ws")
-        tls    = kw.pop("tls", True)
+        tls = kw.pop("tls", True)
+        sni = kw.get("sni", "localhost") or "localhost"
+
         return {
-            "listen": "127.0.0.1",      # فقط localhost — Railway پورت رو expose نمی‌کنه
-            "port":   port,
+            "listen": "127.0.0.1",
+            "port": port,
             "protocol": "vless",
             "settings": {
-                "clients":    [{"id": uuid, "flow": ""}],
+                "clients": [{"id": uuid, "flow": ""}],
                 "decryption": "none",
             },
-            "streamSettings": self._stream(stream, tls, **kw),
+            "streamSettings": self._stream(stream, tls, sni=sni, **kw),
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         }
 
-    # ── Helpers ─────────────────────────────────────────────────────────────
     def _add_stream_params(self, p: dict, stream: str, host: str, sp: dict):
         mode = self.stream_modes.get(stream, {})
         for pdef in mode.get("params", []):
@@ -130,8 +115,9 @@ class VLESSProtocol(BaseProtocol):
         if stream in ("ws", "httpupgrade", "xhttp") and not sp.get("host"):
             p["host"] = host
 
-    def _stream(self, stream: str, tls: bool, **kw) -> dict:
+    def _stream(self, stream: str, tls: bool, sni: str = "localhost", **kw) -> dict:
         ss = {"network": stream}
+
         if stream == "tcp":
             ss["tcpSettings"] = {"header": {"type": "none"}}
         elif stream == "ws":
@@ -142,7 +128,7 @@ class VLESSProtocol(BaseProtocol):
         elif stream == "grpc":
             ss["grpcSettings"] = {
                 "serviceName": kw.get("serviceName", "grpc"),
-                "multiMode":   kw.get("multiMode", True),
+                "multiMode": kw.get("multiMode", True),
             }
         elif stream == "httpupgrade":
             ss["httpUpgradeSettings"] = {
@@ -157,11 +143,11 @@ class VLESSProtocol(BaseProtocol):
             }
         elif stream == "mkcp":
             ss["kcpSettings"] = {
-                "seed":        kw.get("seed", ""),
-                "header":      {"type": kw.get("header", "none")},
-                "congestion":  kw.get("congestion", False),
+                "seed": kw.get("seed", ""),
+                "header": {"type": kw.get("header", "none")},
+                "congestion": kw.get("congestion", False),
             }
-        # Reality
+
         if kw.get("reality"):
             ss["security"] = "reality"
             ss["realitySettings"] = self._build_reality_settings(
@@ -172,7 +158,14 @@ class VLESSProtocol(BaseProtocol):
             )
         elif tls:
             ss["security"] = "tls"
-            ss["tlsSettings"] = self._build_tls_settings(
-                sni=kw.get("sni", "") or kw.get("host", ""),
-            )
+            ss["tlsSettings"] = {
+                "serverName": sni,
+                "certificates": [
+                    {
+                        "certificateFile": "/data/certs/cert.pem",
+                        "keyFile": "/data/certs/key.pem"
+                    }
+                ],
+                "alpn": ["http/1.1"]
+            }
         return ss
