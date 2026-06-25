@@ -52,12 +52,34 @@ for r in (auth_router, links_router, subs_router, xray_router, stats_router, sub
 _http: httpx.AsyncClient | None = None
 
 # ── Startup / Shutdown ────────────────────────────────────────────────────────
+def _ensure_self_signed_cert():
+    """ساخت self-signed cert برای Xray inbound TLS"""
+    import subprocess, os
+    cert_dir = "/data/certs"
+    cert_file = f"{cert_dir}/cert.pem"
+    key_file  = f"{cert_dir}/key.pem"
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        return
+    os.makedirs(cert_dir, exist_ok=True)
+    try:
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", key_file, "-out", cert_file,
+            "-days", "3650", "-nodes",
+            "-subj", "/CN=localhost"
+        ], check=True, capture_output=True)
+        logger.info("🔐 Self-signed cert generated → /data/certs/")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not generate cert: {e} — TLS inbounds will be disabled")
+
+
 @app.on_event("startup")
 async def startup():
     global _http
     init_auth()
     await load_state()
     await _ensure_default_link()
+    _ensure_self_signed_cert()
 
     limits = httpx.Limits(max_connections=500, max_keepalive_connections=100)
     _http  = httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(30, connect=10),
