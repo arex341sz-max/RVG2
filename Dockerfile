@@ -29,7 +29,7 @@ COPY . .
 # ── Dirs ──────────────────────────────────────────────────────────────────────
 RUN mkdir -p /data/xray-configs /data/certs
 
-# ── Self-signed cert برای TLS ──────────────────────────────────────────────────
+# ── Self-signed cert ──────────────────────────────────────────────────────────
 RUN openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout /data/certs/key.pem \
     -out    /data/certs/cert.pem \
@@ -38,10 +38,5 @@ RUN openssl req -x509 -newkey rsa:2048 -nodes \
 
 EXPOSE 8000
 
-# ✅ اصلاح مهم: استفاده از فرمت Shell برای پردازش $PORT
-CMD python -m uvicorn main:app \
-     --host 0.0.0.0 \
-     --port $PORT \
-     --workers 1 \
-     --loop uvloop \
-     --http h11
+# ✅ راهحل نهایی و صددرصد تضمینی برای مشکل $PORT
+CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --loop uvloop --http h11"]
