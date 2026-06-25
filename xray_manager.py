@@ -1,4 +1,4 @@
-"""xray_manager.py"""
+"""xray_manager.py — با لاگ‌گیری بسیار قوی برای دیباگ کرش Xray"""
 import asyncio
 import logging
 import os
@@ -34,22 +34,24 @@ def get_status() -> dict:
     }
 
 
-async def _read_stderr_snippet(process, seconds: float = 2.0) -> str:
-    """چند ثانیه صبر کن و stderr رو بخون"""
-    lines = []
+async def _read_full_stderr(process) -> str:
+    """خواندن کامل stderr برای دیباگ"""
     try:
-        deadline = asyncio.get_event_loop().time() + seconds
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                line = await asyncio.wait_for(process.stderr.readline(), timeout=0.3)
-                if line:
-                    lines.append(line.decode("utf-8", errors="replace").rstrip())
-            except asyncio.TimeoutError:
-                if process.returncode is not None:
-                    break
-    except Exception:
-        pass
-    return "\n".join(lines)
+        stderr_out = await asyncio.wait_for(process.stderr.read(), timeout=4.0)
+        return stderr_out.decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        return f"Failed to read stderr: {e}"
+
+
+async def _log_config_for_debug():
+    """لاگ کردن محتوای config در صورت کرش"""
+    try:
+        if Path(XRAY_MAIN_CFG).exists():
+            with open(XRAY_MAIN_CFG, "r", encoding="utf-8") as f:
+                config_content = f.read()
+            logger.error(f"[Xray Config Content]:\n{config_content}")
+    except Exception as e:
+        logger.error(f"Could not read config for debug: {e}")
 
 
 async def start_xray() -> bool:
@@ -59,40 +61,46 @@ async def start_xray() -> bool:
         logger.error(f"❌ Xray binary not found: {XRAY_BIN}")
         return False
 
+    logger.info(f"📝 Writing Xray config → {XRAY_MAIN_CFG}")
     await write_xray_config()
 
     try:
+        logger.info(f"🚀 Starting Xray with: {XRAY_BIN} run -c {XRAY_MAIN_CFG}")
+
         _process = await asyncio.create_subprocess_exec(
             XRAY_BIN, "run", "-c", XRAY_MAIN_CFG,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _start_time = time.time()
-        _running    = True
-        logger.info(f"🚀 Xray started — PID {_process.pid}")
+        _running = True
+        logger.info(f"✅ Xray process started — PID {_process.pid}")
 
-        # ۲ ثانیه صبر کن ببین crash میکنه یا نه
-        await asyncio.sleep(2)
+        # صبر بیشتر برای تشخیص کرش
+        await asyncio.sleep(3)
 
         if _process.returncode is not None:
-            # crash کرد — stderr رو بخون
-            try:
-                stderr_out = await asyncio.wait_for(_process.stderr.read(), timeout=2.0)
-                stderr_text = stderr_out.decode("utf-8", errors="replace").strip()
-                if stderr_text:
-                    for line in stderr_text.splitlines():
-                        logger.error(f"[xray/STDERR] {line}")
-            except Exception:
-                pass
+            stderr_text = await _read_full_stderr(_process)
+            if stderr_text:
+                for line in stderr_text.splitlines():
+                    logger.error(f"[xray/STDERR] {line}")
+            else:
+                logger.error("No stderr output captured")
+
+            await _log_config_for_debug()   # لاگ config در زمان کرش
+
             logger.error(f"❌ Xray crashed immediately (rc={_process.returncode})")
             return False
 
+        # اگر سالم بود، لاگ‌ها را pipe کن
         asyncio.create_task(_pipe_logs(_process.stdout, "OUT"))
         asyncio.create_task(_pipe_logs(_process.stderr, "ERR"))
+        logger.info("✅ Xray is running successfully")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Xray start failed: {e}")
+        logger.error(f"❌ Failed to start Xray process: {e}")
+        await _log_config_for_debug()
         return False
 
 
@@ -101,21 +109,23 @@ async def stop_xray() -> None:
     _running = False
     if _process and _process.returncode is None:
         try:
+            logger.info(f"🛑 Sending SIGTERM to Xray (PID {_process.pid})")
             _process.send_signal(signal.SIGTERM)
             await asyncio.wait_for(_process.wait(), timeout=5.0)
         except asyncio.TimeoutError:
+            logger.warning("Xray didn't stop gracefully, killing...")
             _process.kill()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error stopping Xray: {e}")
         logger.info("🛑 Xray stopped")
     _process = None
 
 
 async def restart_xray() -> bool:
     global _restart_count
-    logger.info("🔄 Restarting Xray…")
+    logger.info("🔄 Restarting Xray...")
     await stop_xray()
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.8)
     ok = await start_xray()
     if ok:
         _restart_count += 1
@@ -124,11 +134,12 @@ async def restart_xray() -> bool:
 
 async def reload_xray() -> bool:
     if not is_running():
+        logger.warning("Xray not running, doing full restart")
         return await restart_xray()
     await write_xray_config()
     try:
         _process.send_signal(signal.SIGHUP)
-        logger.info("🔃 Xray config reloaded (SIGHUP)")
+        logger.info("🔃 Xray config reloaded via SIGHUP")
         return True
     except Exception as e:
         logger.warning(f"SIGHUP failed: {e} — falling back to restart")
@@ -144,14 +155,17 @@ async def monitor_loop() -> None:
         await asyncio.sleep(5)
         if not _running:
             break
+
         if _process is None or _process.returncode is not None:
             rc = _process.returncode if _process else "N/A"
-            logger.warning(f"⚠️  Xray exited (rc={rc}) — restarting…")
+            logger.warning(f"⚠️ Xray exited (rc={rc}) — restarting...")
             consecutive_crashes += 1
-            backoff = min(consecutive_crashes * 2, 30)
-            if backoff > 2:
+
+            backoff = min(consecutive_crashes * 3, 45)
+            if backoff > 5:
                 logger.warning(f"⏳ Backoff {backoff}s (crashes={consecutive_crashes})")
                 await asyncio.sleep(backoff)
+
             ok = await start_xray()
             if ok:
                 consecutive_crashes = 0
@@ -188,6 +202,6 @@ async def _pipe_logs(stream: asyncio.StreamReader | None, prefix: str) -> None:
                 if prefix == "ERR":
                     logger.warning(f"[xray/{prefix}] {text}")
                 else:
-                    logger.debug(f"[xray/{prefix}] {text}")
+                    logger.info(f"[xray/{prefix}] {text}")   # OUT را هم INFO کن
     except Exception:
         pass
