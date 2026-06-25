@@ -1,8 +1,7 @@
-"""xray_config.py — نسخه نهایی ساده"""
+"""xray_config.py — نسخه نهایی تمیز"""
 import json
 import logging
 from pathlib import Path
-from datetime import datetime
 
 from config    import XRAY_MAIN_CFG, XRAY_PORT_BASE
 from state     import LINKS, LINKS_LOCK
@@ -34,10 +33,11 @@ async def build_xray_config():
                 tls=True,
                 sni="localhost"
             )
-            inbound["tag"] = f"in-{uuid[:8]}"
+            if "tag" not in inbound:
+                inbound["tag"] = f"in-{uuid[:8]}"
             inbounds.append(inbound)
         except Exception as e:
-            logger.warning(f"Skip inbound: {e}")
+            logger.warning(f"Skip inbound {uuid[:8]}: {e}")
 
     if not inbounds:
         inbounds = [{
@@ -69,7 +69,9 @@ async def write_xray_config():
     config = await build_xray_config()
     path = Path(XRAY_MAIN_CFG)
     path.parent.mkdir(parents=True, exist_ok=True)
+    
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+    
     logger.info(f"✅ Config written with {len(config['inbounds'])} inbounds")
     return str(path)
