@@ -12,11 +12,11 @@ class VLESSProtocol(BaseProtocol):
     default_stream = "ws"
 
     stream_modes = {
-        "ws": {"label": "WebSocket", "params": [{"key": "path", "default": "/ws"}]},
+        "ws": {"label": "WebSocket", "params": []},
         "tcp": {"label": "TCP", "params": []},
     }
 
-    def generate_link(self, uuid, host, port, **kwargs):
+    def generate_link(self, uuid, host, port, **k):
         return f"vless://{uuid}@{host}:{port}?security=tls&type=ws&path=/ws#RVG"
 
     def get_xray_inbound(self, port: int, **kw):
@@ -34,7 +34,9 @@ class VLESSProtocol(BaseProtocol):
                 "security": "tls",
                 "tlsSettings": {
                     "serverName": "localhost",
-                    "certificates": [{"certificateFile": "/data/certs/cert.pem", "keyFile": "/data/certs/key.pem"}],
+                    "certificates": [
+                        {"certificateFile": "/data/certs/cert.pem", "keyFile": "/data/certs/key.pem"}
+                    ],
                     "alpn": ["http/1.1"]
                 }
             },
