@@ -718,17 +718,31 @@ async function createLink(){
     sub_id:document.getElementById('nl-sub').value||null,
     note:document.getElementById('nl-note').value,
   };
-  try{
-    const r=await fetch('/api/links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+try{
+    const r=await fetch('/api/links',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body:JSON.stringify(body)
+    });
     if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'خطا');}
     toast('کانفیگ ساخته شد','ok');
-    document.getElementById('nl-label').value='';document.getElementById('nl-note').value='';document.getElementById('nl-val').value='';document.getElementById('nl-exp').value='';document.getElementById('nl-port').value='';
+    // پاک کردن فیلدها...
     refreshAll();
   }catch(e){toast(e.message,'err')}
 }
 
 async function toggleLink(uid,val){
-  try{await fetch('/api/links/'+uid,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:val})});toast(val?'فعال شد':'غیرفعال شد','ok');refreshAll();}catch(e){toast(e.message,'err')}
+  try{
+    await fetch('/api/links/'+uid,{
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body:JSON.stringify({active:val})
+    });
+    toast(val?'فعال شد':'غیرفعال شد','ok');
+    refreshAll();
+  }catch(e){toast(e.message,'err')}
 }
 
 async function deleteLink(uid){
@@ -806,8 +820,20 @@ function navTo(pg){
 }
 
 // ─── Auth ────────────────────────────────────────────────────────
-async function checkAuth(){try{const r=await fetch('/api/me');const d=await r.json();if(!d.authenticated)location.href='/login';}catch(e){location.href='/login'}}
-async function logout(){await fetch('/api/logout',{method:'POST'});location.href='/login'}
+// ─── Auth ────────────────────────────────────────────────────────
+async function checkAuth(){
+  try{
+    const r=await fetch('/api/me', {credentials:'include'});
+    const d=await r.json();
+    if(!d.authenticated) location.href='/login';
+  }catch(e){location.href='/login';}
+}
+async function logout(){
+  try{
+    await fetch('/api/logout',{method:'POST', credentials:'include'});
+  }catch(e){}
+  location.href='/login';
+}
 async function changePw(){
   const cur=document.getElementById('cp-cur').value,nw=document.getElementById('cp-new').value,cf=document.getElementById('cp-cf').value;
   if(nw!==cf){toast('رمز جدید و تکرار مطابقت ندارند','err');return}
@@ -982,17 +1008,30 @@ function renderSubSelect(){
 }
 
 // ─── Refresh ─────────────────────────────────────────────────────
+// ─── Refresh ─────────────────────────────────────────────────────
 async function refreshAll(){
   try{
-    const[sR,lR,subR]=await Promise.all([fetch('/stats'),fetch('/api/links'),fetch('/api/subs')]);
-    if(sR.status===401||lR.status===401||subR.status===401)return location.href='/login';
-    if(!sR.ok)throw new Error('stats: HTTP '+sR.status);
-    if(!lR.ok)throw new Error('links: HTTP '+lR.status);
-    if(!subR.ok)throw new Error('subs: HTTP '+subR.status);
+    const[sR,lR,subR]=await Promise.all([
+      fetch('/stats', {credentials:'include'}),
+      fetch('/api/links', {credentials:'include'}),
+      fetch('/api/subs', {credentials:'include'})
+    ]);
+    
+    if(sR.status===401||lR.status===401||subR.status===401) return location.href='/login';
+    
+    if(!sR.ok || !lR.ok || !subR.ok) throw new Error('خطا در دریافت اطلاعات');
+    
     const [statsJson, linksJson, subsJson] = await Promise.all([sR.json(), lR.json(), subR.json()]);
-    STATS=statsJson; ALL_LINKS=linksJson.links||[]; ALL_SUBS=subsJson.subs||[];
+    
+    STATS=statsJson; 
+    ALL_LINKS=linksJson.links||[]; 
+    ALL_SUBS=subsJson.subs||[];
+    
     renderLinks();renderSubs();renderSubGroupsList();renderSubSelect();renderOverview(STATS,ALL_LINKS);
-  }catch(e){console.error('refreshAll error:',e);toast('خطا در بارگذاری: '+e.message,'err')}
+  }catch(e){
+    console.error('refreshAll error:',e);
+    toast('خطا در بارگذاری: '+e.message,'err');
+  }
 }
 
 // ─── Init ────────────────────────────────────────────────────────
