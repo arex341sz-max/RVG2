@@ -1,4 +1,4 @@
-"""xray_manager.py — اجرا، مانیتور و ری‌استارت Xray به عنوان subprocess"""
+"""xray_manager.py"""
 import asyncio
 import logging
 import os
@@ -11,10 +11,10 @@ from xray_config import write_xray_config
 
 logger = logging.getLogger("RVG.xray")
 
-_process:      asyncio.subprocess.Process | None = None
-_start_time:   float = 0.0
-_restart_count: int  = 0
-_running:       bool = False
+_process:       asyncio.subprocess.Process | None = None
+_start_time:    float = 0.0
+_restart_count: int   = 0
+_running:       bool  = False
 _monitor_task:  asyncio.Task | None = None
 
 
@@ -24,18 +24,36 @@ def is_running() -> bool:
 
 def get_status() -> dict:
     return {
-        "running":        is_running(),
-        "pid":            _process.pid if _process else None,
-        "uptime_secs":    int(time.time() - _start_time) if _start_time else 0,
-        "restart_count":  _restart_count,
-        "bin":            XRAY_BIN,
-        "config":         XRAY_MAIN_CFG,
-        "bin_exists":     Path(XRAY_BIN).exists(),
+        "running":       is_running(),
+        "pid":           _process.pid if _process else None,
+        "uptime_secs":   int(time.time() - _start_time) if _start_time else 0,
+        "restart_count": _restart_count,
+        "bin":           XRAY_BIN,
+        "config":        XRAY_MAIN_CFG,
+        "bin_exists":    Path(XRAY_BIN).exists(),
     }
 
 
+async def _read_stderr_snippet(process, seconds: float = 2.0) -> str:
+    """چند ثانیه صبر کن و stderr رو بخون"""
+    lines = []
+    try:
+        deadline = asyncio.get_event_loop().time() + seconds
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                line = await asyncio.wait_for(process.stderr.readline(), timeout=0.3)
+                if line:
+                    lines.append(line.decode("utf-8", errors="replace").rstrip())
+            except asyncio.TimeoutError:
+                if process.returncode is not None:
+                    break
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 async def start_xray() -> bool:
-    global _process, _start_time, _restart_count, _running
+    global _process, _start_time, _running
 
     if not Path(XRAY_BIN).exists():
         logger.error(f"❌ Xray binary not found: {XRAY_BIN}")
@@ -53,9 +71,26 @@ async def start_xray() -> bool:
         _running    = True
         logger.info(f"🚀 Xray started — PID {_process.pid}")
 
+        # ۲ ثانیه صبر کن ببین crash میکنه یا نه
+        await asyncio.sleep(2)
+
+        if _process.returncode is not None:
+            # crash کرد — stderr رو بخون
+            try:
+                stderr_out = await asyncio.wait_for(_process.stderr.read(), timeout=2.0)
+                stderr_text = stderr_out.decode("utf-8", errors="replace").strip()
+                if stderr_text:
+                    for line in stderr_text.splitlines():
+                        logger.error(f"[xray/STDERR] {line}")
+            except Exception:
+                pass
+            logger.error(f"❌ Xray crashed immediately (rc={_process.returncode})")
+            return False
+
         asyncio.create_task(_pipe_logs(_process.stdout, "OUT"))
         asyncio.create_task(_pipe_logs(_process.stderr, "ERR"))
         return True
+
     except Exception as e:
         logger.error(f"❌ Xray start failed: {e}")
         return False
@@ -150,7 +185,6 @@ async def _pipe_logs(stream: asyncio.StreamReader | None, prefix: str) -> None:
         async for line in stream:
             text = line.decode("utf-8", errors="replace").rstrip()
             if text:
-                # ERR رو با WARNING لاگ کن تا توی لاگ ظاهر بشه
                 if prefix == "ERR":
                     logger.warning(f"[xray/{prefix}] {text}")
                 else:
