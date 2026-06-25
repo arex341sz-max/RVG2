@@ -1,4 +1,4 @@
-"""xray_config.py"""
+"""xray_config.py — نسخه تمیز و بدون خطا"""
 import json
 import logging
 from pathlib import Path
@@ -57,19 +57,16 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
         stream = link.get("stream", "ws")
         tls = link.get("tls", True)
         port = link.get("xray_port") or assign_port(uuid)
-        sni = link.get("sni", "") or "localhost"
+        sni = link.get("sni") or "localhost"
 
         try:
-            import os
-            cert_ok = os.path.exists("/data/certs/cert.pem") and os.path.exists("/data/certs/key.pem")
-            
             proto = get_protocol(protocol_name)
             inbound = proto.get_xray_inbound(
                 port=port,
                 uuid=uuid,
                 password=link.get("secret", uuid),
                 stream=stream,
-                tls=tls and cert_ok,
+                tls=tls,
                 sni=sni,
                 **link.get("stream_params", {})
             )
@@ -79,6 +76,7 @@ async def build_xray_config(snapshot: dict | None = None) -> dict:
             logger.warning(f"Skip inbound {uuid[:8]}: {e}")
 
     if not inbounds:
+        logger.warning("Using placeholder inbound")
         inbounds = [{
             "tag": "placeholder",
             "listen": "127.0.0.1",
@@ -110,9 +108,11 @@ async def write_xray_config() -> str:
     config = await build_xray_config()
     path = Path(XRAY_MAIN_CFG)
     path.parent.mkdir(parents=True, exist_ok=True)
+    
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
-    logger.info(f"📝 Xray config written: {len(config['inbounds'])} inbounds")
+    
+    logger.info(f"✅ Xray config written successfully: {len(config['inbounds'])} inbounds")
     return str(path)
 
 
