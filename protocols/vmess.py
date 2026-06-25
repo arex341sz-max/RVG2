@@ -63,14 +63,14 @@ class VMessProtocol(BaseProtocol):
         return f"vmess://{encoded}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        stream = kw.get("stream", "ws")
-        tls    = kw.get("tls", True)
+        stream = kw.pop("stream", "ws")
+        tls    = kw.pop("tls", True)
         return {
             "listen": "127.0.0.1",
             "port":   port,
             "protocol": "vmess",
             "settings": {
-                "clients": [{"id": kw.get("uuid", ""), "alterId": 0}],
+                "clients": [{"id": kw.pop("uuid", ""), "alterId": 0}],
             },
             "streamSettings": self._stream(stream, tls, **kw),
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
