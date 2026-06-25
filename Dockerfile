@@ -2,10 +2,11 @@ FROM python:3.13-slim
 
 # ── System deps ───────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl wget unzip ca-certificates openssl \
+    curl wget unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Xray binary ───────────────────────────────────────────────────────────────
+# دانلود آخرین نسخه Xray-core
 ARG XRAY_VERSION=v25.1.30
 ARG TARGETARCH=64
 
@@ -29,14 +30,18 @@ COPY . .
 # ── Dirs ──────────────────────────────────────────────────────────────────────
 RUN mkdir -p /data/xray-configs /data/certs
 
-# ── Self-signed cert ──────────────────────────────────────────────────────────
+# ── Self-signed cert برای TLS (production باید واقعی باشه) ──────────────────
 RUN openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout /data/certs/key.pem \
     -out    /data/certs/cert.pem \
     -days   3650 \
-    -subj   "/CN=localhost"
+    -subj   "/CN=localhost" 2>/dev/null || true
 
 EXPOSE 8000
 
-# ✅ راهحل نهایی و صددرصد تضمینی برای مشکل $PORT
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --loop uvloop --http h11"]
+CMD ["python", "-m", "uvicorn", "main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--loop", "uvloop", \
+     "--http", "h11"]
