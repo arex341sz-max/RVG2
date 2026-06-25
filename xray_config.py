@@ -1,0 +1,144 @@
+"""xray_config.py — تولید یک فایل config.json واحد برای Xray با تمام لینک‌های فعال"""
+import json
+import logging
+from pathlib import Path
+from datetime import datetime
+
+from config    import XRAY_MAIN_CFG, XRAY_PORT_BASE, XRAY_PORT_MAX, DATA_DIR
+from state     import LINKS, LINKS_LOCK
+from protocols import get_protocol
+
+logger = logging.getLogger("RVG.xray_config")
+
+# نگهداری map از uuid → port برای ثبات پورت‌ها بین restart
+_PORT_MAP: dict[str, int] = {}
+_NEXT_PORT = XRAY_PORT_BASE
+
+
+def assign_port(uuid: str) -> int:
+    """به هر UUID یه پورت ثابت اختصاص بده"""
+    global _NEXT_PORT
+    if uuid in _PORT_MAP:
+        return _PORT_MAP[uuid]
+    # اگه پورت از قبل توی لینک ذخیره شده، از اون استفاده کن
+    port = _NEXT_PORT
+    _PORT_MAP[uuid] = port
+    _NEXT_PORT += 1
+    if _NEXT_PORT > XRAY_PORT_MAX:
+        _NEXT_PORT = XRAY_PORT_BASE
+    return port
+
+
+def _is_xray_protocol(protocol: str) -> bool:
+    """VLESS/WS از طریق relay مستقیم کار می‌کنه — بقیه از Xray"""
+    # همه پروتکل‌ها از Xray رد می‌شن
+    # WS relay پایتون فقط fallback هست
+    return True
+
+
+def _is_allowed(link: dict) -> bool:
+    if not link.get("active", True):
+        return False
+    exp = link.get("expires_at")
+    if exp:
+        try:
+            if datetime.now() > datetime.fromisoformat(exp):
+                return False
+        except Exception:
+            pass
+    lb = link.get("limit_bytes", 0)
+    if lb > 0 and link.get("used_bytes", 0) >= lb:
+        return False
+    return True
+
+
+async def build_xray_config(snapshot: dict | None = None) -> dict:
+    """ساخت کامل xray config.json با همه لینک‌های فعال"""
+    if snapshot is None:
+        async with LINKS_LOCK:
+            snapshot = dict(LINKS)
+
+    inbounds = []
+
+    for uuid, link in snapshot.items():
+        if not _is_allowed(link):
+            continue
+        protocol_name = link.get("protocol", "vless")
+        stream        = link.get("stream", "ws")
+        tls           = link.get("tls", True)
+        stream_params = link.get("stream_params", {})
+        port          = link.get("xray_port") or assign_port(uuid)
+        secret        = link.get("secret", uuid)
+
+        # ذخیره پورت اختصاصی در لینک برای ثبات
+        link["xray_port"] = port
+
+        try:
+            proto   = get_protocol(protocol_name)
+            inbound = proto.get_xray_inbound(
+                port=port,
+                uuid=uuid,
+                password=secret,
+                stream=stream,
+                tls=tls,
+                sni=link.get("sni", ""),
+                reality=link.get("reality", False),
+                reality_pbk=link.get("reality_pbk", ""),
+                reality_sid=link.get("reality_sid", ""),
+                reality_sni=link.get("reality_sni", ""),
+                reality_fingerprint=link.get("reality_fingerprint", "chrome"),
+                **stream_params,
+            )
+            # تگ یونیک برای هر inbound
+            inbound["tag"] = f"in-{uuid[:8]}"
+            inbounds.append(inbound)
+        except Exception as e:
+            logger.warning(f"Skip inbound {uuid[:8]}: {e}")
+
+    config = {
+        "log": {
+            "loglevel": "warning",
+            "access":   "/data/xray-access.log",
+            "error":    "/data/xray-error.log",
+        },
+        "inbounds": inbounds,
+        "outbounds": [
+            {
+                "protocol": "freedom",
+                "settings": {"domainStrategy": "UseIPv4"},
+                "tag":      "direct",
+            },
+            {
+                "protocol": "blackhole",
+                "settings": {"response": {"type": "none"}},
+                "tag":      "block",
+            },
+        ],
+        "routing": {
+            "domainStrategy": "IPIfNonMatch",
+            "rules": [
+                # بلاک کردن private IPs (جلوگیری از SSRF)
+                {"type": "field", "outboundTag": "block",
+                 "ip": ["geoip:private", "127.0.0.0/8", "::1/128"]},
+                # ترافیک عادی مستقیم
+                {"type": "field", "outboundTag": "direct", "network": "tcp,udp"},
+            ],
+        },
+    }
+    return config
+
+
+async def write_xray_config() -> str:
+    """نوشتن config و برگرداندن مسیر فایل"""
+    config = await build_xray_config()
+    path   = Path(XRAY_MAIN_CFG)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    logger.info(f"📝 Xray config written: {len(config['inbounds'])} inbounds → {path}")
+    return str(path)
+
+
+def get_port_map() -> dict[str, int]:
+    """uuid → port map برای نمایش در داشبورد"""
+    return dict(_PORT_MAP)
