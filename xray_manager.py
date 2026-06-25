@@ -11,7 +11,6 @@ from xray_config import write_xray_config
 
 logger = logging.getLogger("RVG.xray")
 
-# ── State ─────────────────────────────────────────────────────────────────────
 _process:      asyncio.subprocess.Process | None = None
 _start_time:   float = 0.0
 _restart_count: int  = 0
@@ -35,7 +34,6 @@ def get_status() -> dict:
     }
 
 
-# ── Start / Stop ──────────────────────────────────────────────────────────────
 async def start_xray() -> bool:
     global _process, _start_time, _restart_count, _running
 
@@ -43,7 +41,6 @@ async def start_xray() -> bool:
         logger.error(f"❌ Xray binary not found: {XRAY_BIN}")
         return False
 
-    # نوشتن config قبل از هر start
     await write_xray_config()
 
     try:
@@ -56,7 +53,6 @@ async def start_xray() -> bool:
         _running    = True
         logger.info(f"🚀 Xray started — PID {_process.pid}")
 
-        # لاگ خوانی async
         asyncio.create_task(_pipe_logs(_process.stdout, "OUT"))
         asyncio.create_task(_pipe_logs(_process.stderr, "ERR"))
         return True
@@ -91,9 +87,7 @@ async def restart_xray() -> bool:
     return ok
 
 
-# ── Hot-reload config (بدون restart) ─────────────────────────────────────────
 async def reload_xray() -> bool:
-    """ارسال SIGHUP به Xray برای reload config بدون restart"""
     if not is_running():
         return await restart_xray()
     await write_xray_config()
@@ -106,9 +100,7 @@ async def reload_xray() -> bool:
         return await restart_xray()
 
 
-# ── Monitor loop ──────────────────────────────────────────────────────────────
 async def monitor_loop() -> None:
-    """مانیتور Xray و ری‌استارت خودکار اگه crash کرد"""
     global _running
     _running = True
     consecutive_crashes = 0
@@ -121,7 +113,6 @@ async def monitor_loop() -> None:
             rc = _process.returncode if _process else "N/A"
             logger.warning(f"⚠️  Xray exited (rc={rc}) — restarting…")
             consecutive_crashes += 1
-            # backoff اگه crash مکرر داشتیم
             backoff = min(consecutive_crashes * 2, 30)
             if backoff > 2:
                 logger.warning(f"⏳ Backoff {backoff}s (crashes={consecutive_crashes})")
@@ -152,7 +143,6 @@ async def stop_monitor() -> None:
     await stop_xray()
 
 
-# ── Log piping ────────────────────────────────────────────────────────────────
 async def _pipe_logs(stream: asyncio.StreamReader | None, prefix: str) -> None:
     if not stream:
         return
@@ -160,6 +150,10 @@ async def _pipe_logs(stream: asyncio.StreamReader | None, prefix: str) -> None:
         async for line in stream:
             text = line.decode("utf-8", errors="replace").rstrip()
             if text:
-                logger.debug(f"[xray/{prefix}] {text}")
+                # ERR رو با WARNING لاگ کن تا توی لاگ ظاهر بشه
+                if prefix == "ERR":
+                    logger.warning(f"[xray/{prefix}] {text}")
+                else:
+                    logger.debug(f"[xray/{prefix}] {text}")
     except Exception:
         pass
