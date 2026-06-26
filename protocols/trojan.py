@@ -1,4 +1,4 @@
-"""protocols/trojan.py — Trojan با همه مدهای استریم"""
+"""protocols/trojan.py — Trojan با config صحیح برای Xray"""
 from urllib.parse import quote
 from .base import BaseProtocol
 
@@ -42,7 +42,7 @@ class TrojanProtocol(BaseProtocol):
             "icon": "ti-arrow-up-circle",
             "desc": "ارتقای اتصال HTTP",
             "params": [
-                {"key": "path", "label": "مسیر", "placeholder": "/upgrade", "default": "/upgrade"},
+                {"key": "path", "label": "مسیر", "placeholder": "/upgrade",    "default": "/upgrade"},
                 {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
             ],
         },
@@ -51,7 +51,7 @@ class TrojanProtocol(BaseProtocol):
             "icon": "ti-arrows-split-2",
             "desc": "جداسازی GET/POST",
             "params": [
-                {"key": "path", "label": "مسیر", "placeholder": "/xhttp", "default": "/xhttp"},
+                {"key": "path", "label": "مسیر", "placeholder": "/xhttp",      "default": "/xhttp"},
                 {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
                 {"key": "mode", "label": "Mode",  "type": "select",
                  "options": ["auto", "packet-up"], "default": "auto"},
@@ -59,24 +59,13 @@ class TrojanProtocol(BaseProtocol):
         },
     }
 
-    def generate_link(
-        self,
-        password: str,
-        host: str,
-        port: int,
-        stream: str = "ws",
-        tls: bool = True,
-        sni: str = "",
-        fingerprint: str = "chrome",
-        alpn: str = "http/1.1",
-        remark: str = "RVG",
-        reality: bool = False,
-        reality_pbk: str = "",
-        reality_sid: str = "",
-        reality_sni: str = "",
-        reality_fingerprint: str = "chrome",
-        **sp,
-    ) -> str:
+    def generate_link(self, password: str = "", host: str = "", port: int = 443,
+                      stream: str = "ws", tls: bool = True,
+                      sni: str = "", fingerprint: str = "chrome", alpn: str = "http/1.1",
+                      remark: str = "RVG", reality: bool = False,
+                      reality_pbk: str = "", reality_sid: str = "",
+                      reality_sni: str = "", reality_fingerprint: str = "chrome",
+                      **sp) -> str:
         p: dict = {}
         if reality:
             p.update(security="reality", pbk=reality_pbk, sid=reality_sid,
@@ -87,13 +76,12 @@ class TrojanProtocol(BaseProtocol):
             p["security"] = "none"
         p["type"] = stream
 
-        # stream params
         mode = self.stream_modes.get(stream, {})
         for pdef in mode.get("params", []):
             key = pdef["key"]
             val = sp.get(key, pdef.get("default", ""))
             if val is not None and val != "" and val is not False:
-                p[key] = "true" if isinstance(val, bool) and val else str(val)
+                p[key] = "true" if (isinstance(val, bool) and val) else str(val)
         if stream in ("ws", "httpupgrade", "xhttp") and not sp.get("host"):
             p["host"] = host
 
@@ -101,33 +89,34 @@ class TrojanProtocol(BaseProtocol):
         return f"trojan://{password}@{host}:{port}?{q}#{quote(remark)}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        password = kw.pop("password", "")
-        stream   = kw.pop("stream", "ws")
-        tls      = kw.pop("tls", True)
+        # ✅ pop کن تا duplicate argument نشه
+        stream = kw.pop("stream", "ws")
+        tls    = kw.pop("tls", True)
         return {
-            "listen": "127.0.0.1",
-            "port":   port,
+            "listen":   "127.0.0.1",
+            "port":     port,
             "protocol": "trojan",
             "settings": {
-                "clients": [{"password": password}],
+                "clients": [{"password": kw.get("password", "")}],
             },
-            "streamSettings": self._stream(stream, tls, **kw),
+            "streamSettings": self._build_stream(stream, tls, **kw),
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         }
 
-    def _stream(self, stream: str, tls: bool, **kw) -> dict:
-        ss = {"network": stream}
+    def _build_stream(self, stream: str, tls: bool, **kw) -> dict:
+        ss: dict = {"network": stream}
+
         if stream == "tcp":
             ss["tcpSettings"] = {"header": {"type": "none"}}
         elif stream == "ws":
-            ss["wsSettings"] = {
-                "path": kw.get("path", "/ws"),
-                "headers": {"Host": kw.get("host", "")} if kw.get("host") else {},
-            }
+            ws_s: dict = {"path": kw.get("path", "/ws")}
+            if kw.get("host"):
+                ws_s["headers"] = {"Host": kw["host"]}
+            ss["wsSettings"] = ws_s
         elif stream == "grpc":
             ss["grpcSettings"] = {
                 "serviceName": kw.get("serviceName", "grpc"),
-                "multiMode":   kw.get("multiMode", True),
+                "multiMode":   bool(kw.get("multiMode", True)),
             }
         elif stream == "httpupgrade":
             ss["httpUpgradeSettings"] = {
@@ -140,17 +129,26 @@ class TrojanProtocol(BaseProtocol):
                 "host": kw.get("host", ""),
                 "mode": kw.get("mode", "auto"),
             }
+
         if kw.get("reality"):
             ss["security"] = "reality"
-            ss["realitySettings"] = self._build_reality_settings(
-                sni=kw.get("reality_sni", "") or kw.get("host", ""),
-                pbk=kw.get("reality_pbk", ""),
-                sid=kw.get("reality_sid", ""),
-                fp=kw.get("reality_fingerprint", "chrome"),
-            )
+            ss["realitySettings"] = {
+                "show":        False,
+                "dest":        f"{kw.get('reality_sni','') or kw.get('host','')}:443",
+                "xver":        0,
+                "serverNames": [kw.get("reality_sni", "") or kw.get("host", "")],
+                "privateKey":  kw.get("reality_pbk", ""),
+                "shortIds":    [kw.get("reality_sid", "")],
+                "fingerprint": kw.get("reality_fingerprint", "chrome"),
+            }
         elif tls:
             ss["security"] = "tls"
-            ss["tlsSettings"] = self._build_tls_settings(
-                sni=kw.get("sni", "") or kw.get("host", ""),
-            )
+            ss["tlsSettings"] = {
+                "serverName":   kw.get("sni", "") or "",
+                "certificates": [{
+                    "certificateFile": "/data/certs/cert.pem",
+                    "keyFile":         "/data/certs/key.pem",
+                }],
+                "alpn": ["http/1.1"],
+            }
         return ss
