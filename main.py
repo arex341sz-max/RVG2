@@ -51,11 +51,6 @@ _http: httpx.AsyncClient | None = None
 
 
 def _ensure_self_signed_cert() -> bool:
-    """
-    ساخت self-signed cert برای Xray inbound TLS.
-    مسیر از config.py خونده میشه — نه hardcode.
-    True = cert آماده‌ست، False = شکست خورد.
-    """
     import subprocess
 
     cert_file = XRAY_CERT_FILE
@@ -145,14 +140,45 @@ async def _ensure_default_link():
                 "is_default":   True,
                 "sub_id":       None,
                 "xray_port":    None,
+                "stream_params": {"path": f"/ws/{uid}"},  # ✅ FIX
             }
             asyncio.create_task(save_state())
 
 
+# ── WebSocket endpoints ───────────────────────────────────────────────────────
+
 @app.websocket("/ws/{uuid}")
 async def websocket_endpoint(ws: WebSocket, uuid: str):
+    """مسیر اصلی: /ws/{uuid}"""
     await handle_ws(ws, uuid)
 
+
+@app.websocket("/ws")
+async def websocket_plain(ws: WebSocket):
+    """
+    ✅ FIX: مسیر fallback /ws — UUID رو از query param یا header میگیره.
+    کلاینت‌هایی که path=/ws دارن و UUID جدا ارسال میکنن اینجا میان.
+    """
+    uuid = ws.query_params.get("uuid") or ws.query_params.get("ed")
+    if not uuid:
+        uuid = ws.headers.get("x-uuid") or ws.headers.get("X-UUID")
+    if not uuid:
+        proto_header = ws.headers.get("sec-websocket-protocol", "")
+        parts = [p.strip() for p in proto_header.split(",")]
+        for part in parts:
+            if len(part) == 36 and part.count("-") == 4:
+                uuid = part
+                break
+
+    if not uuid:
+        logger.warning("🚫 WS /ws rejected — no UUID provided")
+        await ws.close(code=1008, reason="UUID required")
+        return
+
+    await handle_ws(ws, uuid)
+
+
+# ── HTTP endpoints ────────────────────────────────────────────────────────────
 
 @app.get("/api/protocols")
 async def api_protocols():
