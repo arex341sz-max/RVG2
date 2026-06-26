@@ -12,6 +12,11 @@ XRAY_CONFIG_DIR = os.environ.get("XRAY_CONFIG_DIR", "/data/xray-configs")
 XRAY_BIN        = os.environ.get("XRAY_BIN", "/usr/local/bin/xray")
 XRAY_MAIN_CFG   = os.environ.get("XRAY_MAIN_CFG", "/data/xray-main.json")
 
+# ✅ مسیر cert — یکپارچه در همه‌جا
+XRAY_CERT_DIR  = os.environ.get("XRAY_CERT_DIR", "/data/certs")
+XRAY_CERT_FILE = os.path.join(XRAY_CERT_DIR, "cert.pem")
+XRAY_KEY_FILE  = os.path.join(XRAY_CERT_DIR, "key.pem")
+
 # پورت base برای لینک‌های Xray (هر لینک یه پورت = BASE + index)
 XRAY_PORT_BASE  = int(os.environ.get("XRAY_PORT_BASE", 10000))
 XRAY_PORT_MAX   = int(os.environ.get("XRAY_PORT_MAX",  19999))
