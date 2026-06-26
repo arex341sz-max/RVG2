@@ -19,7 +19,7 @@ class TrojanProtocol(BaseProtocol):
             "icon": "ti-webhook",
             "desc": "عبور از فایروال با هدر HTTP",
             "params": [
-                {"key": "path", "label": "مسیر", "placeholder": "/ws",          "default": "/ws"},
+                {"key": "path", "label": "مسیر", "placeholder": "/ws/{uuid}", "default": "/ws"},
                 {"key": "host", "label": "Host",  "placeholder": "example.com",  "default": ""},
             ],
         },
@@ -60,7 +60,7 @@ class TrojanProtocol(BaseProtocol):
         },
     }
 
-    def generate_link(self, password: str = "", host: str = "", port: int = 443,
+    def generate_link(self, password: str = "", uuid: str = "", host: str = "", port: int = 443,
                       stream: str = "ws", tls: bool = True,
                       sni: str = "", fingerprint: str = "chrome", alpn: str = "http/1.1",
                       remark: str = "RVG", reality: bool = False,
@@ -83,6 +83,14 @@ class TrojanProtocol(BaseProtocol):
             val = sp.get(key, pdef.get("default", ""))
             if val is not None and val != "" and val is not False:
                 p[key] = "true" if (isinstance(val, bool) and val) else str(val)
+
+        # ✅ FIX: اگه ws و path پیش‌فرضه، UUID/password رو اضافه کن
+        if stream == "ws":
+            current_path = p.get("path", "/ws")
+            link_id = password or uuid
+            if current_path in ("/ws", "") and link_id:
+                p["path"] = f"/ws/{link_id}"
+
         if stream in ("ws", "httpupgrade", "xhttp") and not sp.get("host"):
             p["host"] = host
 
@@ -90,26 +98,34 @@ class TrojanProtocol(BaseProtocol):
         return f"trojan://{password}@{host}:{port}?{q}#{quote(remark)}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        stream = kw.pop("stream", "ws")
-        tls    = kw.pop("tls", True)
+        uuid     = kw.get("uuid", "")
+        password = kw.get("password", "")
+        stream   = kw.pop("stream", "ws")
+        tls      = kw.pop("tls", True)
         return {
-            "listen":   "0.0.0.0",  # ✅ FIXED: Changed from 127.0.0.1 to 0.0.0.0
+            "listen":   "0.0.0.0",
             "port":     port,
             "protocol": "trojan",
             "settings": {
-                "clients": [{"password": kw.get("password", "")}],
+                "clients": [{"password": password}],
             },
-            "streamSettings": self._build_stream(stream, tls, **kw),
+            "streamSettings": self._build_stream(stream, tls, uuid=uuid, **kw),
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         }
 
     def _build_stream(self, stream: str, tls: bool, **kw) -> dict:
+        uuid     = kw.get("uuid", "")
+        password = kw.get("password", "")
         ss: dict = {"network": stream}
 
         if stream == "tcp":
             ss["tcpSettings"] = {"header": {"type": "none"}}
         elif stream == "ws":
-            ws_s: dict = {"path": kw.get("path", "/ws")}
+            # ✅ FIX: path رو /ws/{uuid} بساز
+            raw_path = kw.get("path", "/ws")
+            link_id  = password or uuid
+            ws_path  = f"/ws/{link_id}" if raw_path in ("/ws", "") and link_id else raw_path
+            ws_s: dict = {"path": ws_path}
             if kw.get("host"):
                 ws_s["headers"] = {"Host": kw["host"]}
             ss["wsSettings"] = ws_s
