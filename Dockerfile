@@ -1,11 +1,9 @@
 FROM python:3.12-slim
 
-# System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget unzip ca-certificates openssl \
     && rm -rf /var/lib/apt/lists/*
 
-# Xray (نسخه تست‌شده)
 ARG XRAY_VERSION=v25.1.30
 RUN wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" -O /tmp/xray.zip \
     && unzip -q /tmp/xray.zip -d /tmp \
@@ -18,14 +16,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN mkdir -p /data/xray-configs /data/certs
 
-# Self-signed cert
-RUN openssl req -x509 -newkey rsa:2048 -nodes \
-    -keyout /data/certs/key.pem \
-    -out    /data/certs/cert.pem \
-    -days   3650 \
-    -subj   "/CN=localhost" 2>/dev/null || true
+# ✅ cert داخل /app/certs — داخل image، نه volume /data
+RUN mkdir -p /app/certs \
+    && openssl req -x509 -newkey rsa:2048 -nodes \
+       -keyout /app/certs/key.pem \
+       -out    /app/certs/cert.pem \
+       -days   3650 \
+       -subj   "/CN=rvg-gateway" 2>/dev/null
 
 EXPOSE 8000
 
