@@ -100,6 +100,7 @@ class SIZ10AProtocol(BaseProtocol):
         reality_fingerprint: str = "chrome",
         **sp,
     ) -> str:
+        # SIZ10A از VLESS به عنوان پروتکل پایه استفاده میکنه (بهترین encryption=none با TLS)
         p = {"encryption": "none"}
 
         if reality:
@@ -112,6 +113,7 @@ class SIZ10AProtocol(BaseProtocol):
                 type=stream,
             )
         elif tls:
+            # SIZ10A پیش‌فرض: h3 (QUIC) برای xhttp، h2 برای بقیه
             _alpn = alpn if alpn else ("h3" if stream == "xhttp" else "h2,http/1.1")
             p.update(security="tls", sni=sni or host, fp=fingerprint, alpn=_alpn, type=stream)
         else:
@@ -124,6 +126,7 @@ class SIZ10AProtocol(BaseProtocol):
             if val not in (None, "", False):
                 p[key] = "true" if isinstance(val, bool) and val else str(val)
 
+        # path fix: اگه ws یا xhttp و path پیش‌فرضه، uuid اضافه کن
         if stream in ("ws", "xhttp", "httpupgrade"):
             cur = p.get("path", "/siz")
             if cur in ("/siz", "/ws", "") and uuid:
@@ -131,6 +134,7 @@ class SIZ10AProtocol(BaseProtocol):
             if not sp.get("host"):
                 p["host"] = host
 
+        # early data برای WS — کاهش RTT اولیه
         if stream == "ws":
             p.setdefault("earlyDataHeaderName", "Sec-WebSocket-Protocol")
 
@@ -139,8 +143,7 @@ class SIZ10AProtocol(BaseProtocol):
 
     # ── Xray inbound ──────────────────────────────────────────────────────────
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        # FIX: از pop استفاده می‌کنیم تا uuid تکراری نشه در _build_stream
-        uuid   = kw.pop("uuid", "")
+        uuid   = kw.get("uuid", "")
         stream = kw.pop("stream", "xhttp")
         tls    = kw.pop("tls", True)
         return {
@@ -159,6 +162,7 @@ class SIZ10AProtocol(BaseProtocol):
                 "enabled":      True,
                 "destOverride": ["http", "tls", "quic"],
                 "routeOnly":    False,
+                # metadataOnly=False برای sniff کامل — کمک به routing بهتر
             },
         }
 
@@ -175,8 +179,10 @@ class SIZ10AProtocol(BaseProtocol):
             ss["wsSettings"] = {
                 "path": path,
                 "headers": {"Host": kw.get("host", "")} if kw.get("host") else {},
+                # early data: کاهش RTT اولیه از 2 به 1
                 "maxEarlyData":        1024,
                 "earlyDataHeaderName": kw.get("earlyDataHeaderName", "Sec-WebSocket-Protocol"),
+                # بدون compression — overhead کمتر
                 "acceptProxyProtocol": False,
             }
 
@@ -186,6 +192,7 @@ class SIZ10AProtocol(BaseProtocol):
                 "multiMode":          bool(kw.get("multiMode", True)),
                 "idle_timeout":       int(kw.get("idle_timeout", 60)),
                 "health_check_timeout": int(kw.get("health_check_timeout", 20)),
+                # permitWithoutStream: keepalive بدون stream فعال
                 "permit_without_stream": True,
                 "initial_windows_size":  65536,
             }
@@ -205,11 +212,17 @@ class SIZ10AProtocol(BaseProtocol):
                 "path": path,
                 "host": kw.get("host", ""),
                 "mode": kw.get("mode", "auto"),
+                # حداکثر اندازه هر upload chunk — 100MB
                 "maxUploadSize":        int(kw.get("maxUploadSize", 100)) * 1024 * 1024,
+                # concurrent upload streams — throughput بیشتر
                 "maxConcurrentUploads": int(kw.get("maxConcurrentUploads", 10)),
+                # noSSEHeader: overhead کمتر
                 "noSSEHeader": False,
+                # scMaxEachPostBytes: حداکثر بایت هر POST
                 "scMaxEachPostBytes": 1 * 1024 * 1024,
+                # scMinPostsIntervalMs: حداقل فاصله بین POSTها
                 "scMinPostsIntervalMs": 30,
+                # xPaddingBytes: padding برای bypass DPI
                 "xPaddingBytes": "100-1000",
             }
 
@@ -236,6 +249,7 @@ class SIZ10AProtocol(BaseProtocol):
                     "keyFile":         XRAY_KEY_FILE,
                 }],
                 "alpn": _alpn,
+                # sessionTicket: TLS session reuse — کاهش handshake overhead
                 "enableSessionResumption": True,
             }
         return ss
