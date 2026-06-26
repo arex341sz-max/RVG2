@@ -11,18 +11,19 @@ class Hysteria2Protocol(BaseProtocol):
     supports_tls = True
     default_tls = True
     supports_reality = False
-    default_stream = "quic"
+    default_stream = "xhttp"
 
     stream_modes = {
-        "quic": {
-            "label": "QUIC (TLS)",
+        "xhttp": {
+            "label": "XHTTP (H3)",
             "icon": "ti-bolt",
-            "desc": "UDP/QUIC خودکار",
+            "desc": "HTTP/3 over QUIC",
             "params": [
-                {"key": "obfs",       "label": "Obfs Password",     "placeholder": "خالی=بدون obfs", "default": ""},
-                {"key": "salamander", "label": "Salamander Obfs",    "type": "bool",                  "default": False},
-                {"key": "up_mbps",    "label": "آپلود (Mbps)",       "placeholder": "0=∞",            "default": "0"},
-                {"key": "down_mbps",  "label": "دانلود (Mbps)",      "placeholder": "0=∞",            "default": "0"},
+                {"key": "path",       "label": "Path",             "placeholder": "/h3",         "default": "/h3"},
+                {"key": "obfs",       "label": "Obfs Password",    "placeholder": "خالی=بدون", "default": ""},
+                {"key": "salamander", "label": "Salamander Obfs",  "type": "bool",              "default": False},
+                {"key": "up_mbps",    "label": "آپلود (Mbps)",     "placeholder": "0=∞",       "default": "0"},
+                {"key": "down_mbps",  "label": "دانلود (Mbps)",    "placeholder": "0=∞",       "default": "0"},
             ],
         },
     }
@@ -30,8 +31,11 @@ class Hysteria2Protocol(BaseProtocol):
     def generate_link(self, password: str, host: str, port: int,
                       sni: str = "", alpn: str = "h3", remark: str = "RVG",
                       obfs: str = "", salamander: bool = False,
-                      up_mbps: str = "0", down_mbps: str = "0", **kw) -> str:
-        p = {"security": "tls", "sni": sni or host, "type": "quic", "alpn": alpn}
+                      up_mbps: str = "0", down_mbps: str = "0", 
+                      path: str = "/h3", **kw) -> str:
+        p = {"security": "tls", "sni": sni or host, "type": "xhttp", "alpn": alpn}
+        if path:
+            p["path"] = path
         if salamander and obfs:
             p["obfs"] = "salamander"
             p["obfs-password"] = obfs
@@ -44,7 +48,7 @@ class Hysteria2Protocol(BaseProtocol):
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
         inbound = {
-            "listen":   "0.0.0.0",   # Hysteria2 باید مستقیم expose بشه (UDP)
+            "listen":   "0.0.0.0",
             "port":     port,
             "protocol": "hysteria2",
             "settings": {
@@ -52,7 +56,10 @@ class Hysteria2Protocol(BaseProtocol):
                 "ignoreClientBandwidth": True,
             },
             "streamSettings": {
-                "network":  "quic",
+                "network":  "xhttp",
+                "xhttpSettings": {
+                    "path": kw.get("path", "/h3"),
+                },
                 "security": "tls",
                 "tlsSettings": {
                     "serverName":   kw.get("sni", ""),
