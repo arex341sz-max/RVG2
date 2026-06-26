@@ -55,6 +55,10 @@ async def build_xray_config() -> dict:
 
         try:
             proto   = get_protocol(link.get("protocol", "vless"))
+            # کلیدهای تکراری را از stream_params حذف کن
+            _explicit = {"port", "uuid", "password", "stream", "tls", "sni",
+                         "reality", "reality_pbk", "reality_sid", "reality_sni", "reality_fingerprint"}
+            sp = {k: v for k, v in link.get("stream_params", {}).items() if k not in _explicit}
             inbound = proto.get_xray_inbound(
                 port=port,
                 uuid=uuid,
@@ -67,7 +71,7 @@ async def build_xray_config() -> dict:
                 reality_sid=link.get("reality_sid", ""),
                 reality_sni=link.get("reality_sni", ""),
                 reality_fingerprint=link.get("reality_fingerprint", "chrome"),
-                **link.get("stream_params", {}),
+                **sp,
             )
             inbound["tag"] = f"in-{uuid[:8]}"
             inbounds.append(inbound)
