@@ -1,38 +1,43 @@
-"""protocols/vless.py — VLESS با config صحیح برای Xray"""
+"""protocols/vless.py — VLESS بهینه‌شده برای حداکثر سرعت"""
 from urllib.parse import quote
 from config import XRAY_CERT_FILE, XRAY_KEY_FILE
 from .base import BaseProtocol
 
 
 class VLESSProtocol(BaseProtocol):
-    display_name = "VLESS"
-    icon = "ti-shield-check"
-    color = "#3B82F6"
-    supports_tls = True
-    default_tls = True
+    display_name     = "VLESS"
+    icon             = "ti-shield-check"
+    color            = "#3B82F6"
+    supports_tls     = True
+    default_tls      = True
     supports_reality = True
-    default_stream = "ws"
+    default_stream   = "ws"
 
     stream_modes = {
         "ws": {
             "label": "WebSocket",
-            "icon": "ti-webhook",
-            "desc": "عبور از فایروال با هدر HTTP",
+            "icon":  "ti-webhook",
+            "desc":  "عبور از فایروال — Early Data فعال",
             "params": [
                 {"key": "path", "label": "مسیر", "placeholder": "/ws/{uuid}", "default": "/ws"},
-                {"key": "host", "label": "Host",  "placeholder": "example.com",  "default": ""},
+                {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
             ],
         },
-        "tcp": {
-            "label": "TCP",
-            "icon": "ti-arrows-transfer-down",
-            "desc": "مستقیم و سریع",
-            "params": [],
+        "xhttp": {
+            "label": "XHTTP (SplitHTTP)",
+            "icon":  "ti-arrows-split-2",
+            "desc":  "سریع‌ترین — GET/POST جداگانه، مقاوم بالا",
+            "params": [
+                {"key": "path", "label": "مسیر", "placeholder": "/xhttp", "default": "/xhttp"},
+                {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
+                {"key": "mode", "label": "Mode",  "type": "select",
+                 "options": ["auto", "packet-up", "stream-up"], "default": "auto"},
+            ],
         },
         "grpc": {
             "label": "gRPC",
-            "icon": "ti-binary-tree-2",
-            "desc": "HTTP/2 multiplexing",
+            "icon":  "ti-binary-tree-2",
+            "desc":  "HTTP/2 multiplexing",
             "params": [
                 {"key": "serviceName", "label": "Service Name", "placeholder": "grpc", "default": "grpc"},
                 {"key": "multiMode",   "label": "Multi Mode",   "type": "bool",        "default": True},
@@ -40,33 +45,28 @@ class VLESSProtocol(BaseProtocol):
         },
         "httpupgrade": {
             "label": "HTTPUpgrade",
-            "icon": "ti-arrow-up-circle",
-            "desc": "ارتقای اتصال HTTP",
+            "icon":  "ti-arrow-up-circle",
+            "desc":  "ارتقای HTTP — سازگاری بالا",
             "params": [
-                {"key": "path", "label": "مسیر", "placeholder": "/upgrade",    "default": "/upgrade"},
+                {"key": "path", "label": "مسیر", "placeholder": "/upgrade", "default": "/upgrade"},
                 {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
             ],
         },
-        "xhttp": {
-            "label": "XHTTP (SplitHTTP)",
-            "icon": "ti-arrows-split-2",
-            "desc": "جداسازی GET/POST — مقاوم بالا",
-            "params": [
-                {"key": "path", "label": "مسیر", "placeholder": "/xhttp",      "default": "/xhttp"},
-                {"key": "host", "label": "Host",  "placeholder": "example.com", "default": ""},
-                {"key": "mode", "label": "Mode",  "type": "select",
-                 "options": ["auto", "packet-up"], "default": "auto"},
-            ],
+        "tcp": {
+            "label": "TCP",
+            "icon":  "ti-arrows-transfer-down",
+            "desc":  "مستقیم — کمترین overhead",
+            "params": [],
         },
         "mkcp": {
             "label": "mKCP",
-            "icon": "ti-bolt",
-            "desc": "بر اساس UDP",
+            "icon":  "ti-bolt",
+            "desc":  "UDP — مقاوم در برابر packet loss",
             "params": [
-                {"key": "seed",       "label": "Seed",               "placeholder": "رندوم", "default": ""},
-                {"key": "header",     "label": "Header Type",        "type": "select",
+                {"key": "seed",       "label": "Seed",         "placeholder": "رندوم", "default": ""},
+                {"key": "header",     "label": "Header Type",  "type": "select",
                  "options": ["none","srtp","utp","wechat-video","dtls","wireguard"], "default": "none"},
-                {"key": "congestion", "label": "Congestion Control", "type": "bool", "default": False},
+                {"key": "congestion", "label": "Congestion",   "type": "bool", "default": False},
             ],
         },
     }
@@ -83,7 +83,8 @@ class VLESSProtocol(BaseProtocol):
             p.update(security="reality", pbk=reality_pbk, sid=reality_sid,
                      sni=reality_sni or host, fp=reality_fingerprint or fingerprint, type=stream)
         elif tls:
-            p.update(security="tls", sni=sni or host, fp=fingerprint, alpn=alpn, type=stream)
+            _alpn = "h3" if stream == "xhttp" else alpn
+            p.update(security="tls", sni=sni or host, fp=fingerprint, alpn=_alpn, type=stream)
         else:
             p.update(security="none", type=stream)
 
@@ -91,16 +92,15 @@ class VLESSProtocol(BaseProtocol):
         for pdef in mode.get("params", []):
             key = pdef["key"]
             val = sp.get(key, pdef.get("default", ""))
-            if val is not None and val != "" and val is not False:
-                p[key] = "true" if (isinstance(val, bool) and val) else str(val)
+            if val not in (None, "", False):
+                p[key] = "true" if isinstance(val, bool) and val else str(val)
 
-        # ✅ FIX: اگه ws و path پیش‌فرضه، UUID رو اضافه کن
         if stream == "ws":
-            current_path = p.get("path", "/ws")
-            if current_path in ("/ws", "") and uuid:
+            cur = p.get("path", "/ws")
+            if cur in ("/ws", "") and uuid:
                 p["path"] = f"/ws/{uuid}"
-
-        if stream in ("ws", "httpupgrade", "xhttp") and not sp.get("host"):
+            p.setdefault("earlyDataHeaderName", "Sec-WebSocket-Protocol")
+        if stream in ("ws", "xhttp", "httpupgrade") and not sp.get("host"):
             p["host"] = host
 
         q = "&".join(f"{k}={quote(str(v))}" for k, v in p.items())
@@ -110,16 +110,17 @@ class VLESSProtocol(BaseProtocol):
         uuid   = kw.get("uuid", "")
         stream = kw.pop("stream", "ws")
         tls    = kw.pop("tls", True)
+        flow   = "xtls-rprx-vision" if stream == "tcp" and kw.get("reality") else ""
         return {
             "listen":   "0.0.0.0",
             "port":     port,
             "protocol": "vless",
             "settings": {
-                "clients":    [{"id": uuid, "flow": ""}],
+                "clients":    [{"id": uuid, "flow": flow}],
                 "decryption": "none",
             },
             "streamSettings": self._build_stream(stream, tls, uuid=uuid, **kw),
-            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]},
         }
 
     def _build_stream(self, stream: str, tls: bool, **kw) -> dict:
@@ -128,38 +129,56 @@ class VLESSProtocol(BaseProtocol):
 
         if stream == "tcp":
             ss["tcpSettings"] = {"header": {"type": "none"}}
+
         elif stream == "ws":
-            # ✅ FIX: path رو /ws/{uuid} بساز مگه اینکه user صراحتاً path دیگه‌ای داده باشه
-            raw_path = kw.get("path", "/ws")
-            if raw_path in ("/ws", "") and uuid:
-                ws_path = f"/ws/{uuid}"
-            else:
-                ws_path = raw_path
-            ws_s: dict = {"path": ws_path}
-            if kw.get("host"):
-                ws_s["headers"] = {"Host": kw["host"]}
-            ss["wsSettings"] = ws_s
+            raw  = kw.get("path", "/ws")
+            path = f"/ws/{uuid}" if raw in ("/ws", "") and uuid else raw
+            ss["wsSettings"] = {
+                "path": path,
+                "headers":             {"Host": kw["host"]} if kw.get("host") else {},
+                "maxEarlyData":        1024,
+                "earlyDataHeaderName": "Sec-WebSocket-Protocol",
+            }
+
+        elif stream == "xhttp":
+            raw  = kw.get("path", "/xhttp")
+            path = f"/xhttp/{uuid}" if raw in ("/xhttp", "") and uuid else raw
+            ss["xhttpSettings"] = {
+                "path": path,
+                "host": kw.get("host", ""),
+                "mode": kw.get("mode", "auto"),
+                "maxUploadSize":        100 * 1024 * 1024,
+                "maxConcurrentUploads": 10,
+                "scMaxEachPostBytes":   1 * 1024 * 1024,
+                "scMinPostsIntervalMs": 30,
+                "xPaddingBytes":        "100-1000",
+            }
+
         elif stream == "grpc":
             ss["grpcSettings"] = {
                 "serviceName": kw.get("serviceName", "grpc"),
                 "multiMode":   bool(kw.get("multiMode", True)),
+                "idle_timeout":  60,
+                "health_check_timeout": 20,
+                "permit_without_stream": True,
             }
+
         elif stream == "httpupgrade":
-            ss["httpUpgradeSettings"] = {
-                "path": kw.get("path", "/upgrade"),
-                "host": kw.get("host", ""),
-            }
-        elif stream == "xhttp":
-            ss["xhttpSettings"] = {
-                "path": kw.get("path", "/xhttp"),
-                "host": kw.get("host", ""),
-                "mode": kw.get("mode", "auto"),
-            }
+            raw  = kw.get("path", "/upgrade")
+            path = f"/upgrade/{uuid}" if raw in ("/upgrade", "") and uuid else raw
+            ss["httpUpgradeSettings"] = {"path": path, "host": kw.get("host", "")}
+
         elif stream == "mkcp":
             ss["kcpSettings"] = {
-                "seed":      kw.get("seed", ""),
-                "header":    {"type": kw.get("header", "none")},
-                "congestion": bool(kw.get("congestion", False)),
+                "mtu":          1350,
+                "tti":          20,
+                "uplinkCapacity":   100,
+                "downlinkCapacity": 100,
+                "congestion":   bool(kw.get("congestion", False)),
+                "readBufferSize":  4,
+                "writeBufferSize": 4,
+                "seed":    kw.get("seed", ""),
+                "header":  {"type": kw.get("header", "none")},
             }
 
         if kw.get("reality"):
@@ -174,13 +193,13 @@ class VLESSProtocol(BaseProtocol):
                 "fingerprint": kw.get("reality_fingerprint", "chrome"),
             }
         elif tls:
+            _alpn = ["h3", "h2", "http/1.1"] if stream == "xhttp" else ["h2", "http/1.1"]
             ss["security"] = "tls"
             ss["tlsSettings"] = {
                 "serverName":   kw.get("sni", "") or "",
-                "certificates": [{
-                    "certificateFile": XRAY_CERT_FILE,
-                    "keyFile":         XRAY_KEY_FILE,
-                }],
-                "alpn": ["http/1.1"],
+                "minVersion":   "1.2",
+                "certificates": [{"certificateFile": XRAY_CERT_FILE, "keyFile": XRAY_KEY_FILE}],
+                "alpn": _alpn,
+                "enableSessionResumption": True,
             }
         return ss
