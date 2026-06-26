@@ -1,5 +1,6 @@
 """protocols/trojan.py — Trojan با config صحیح برای Xray"""
 from urllib.parse import quote
+from config import XRAY_CERT_FILE, XRAY_KEY_FILE
 from .base import BaseProtocol
 
 
@@ -89,7 +90,6 @@ class TrojanProtocol(BaseProtocol):
         return f"trojan://{password}@{host}:{port}?{q}#{quote(remark)}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        # ✅ pop کن تا duplicate argument نشه
         stream = kw.pop("stream", "ws")
         tls    = kw.pop("tls", True)
         return {
@@ -146,8 +146,8 @@ class TrojanProtocol(BaseProtocol):
             ss["tlsSettings"] = {
                 "serverName":   kw.get("sni", "") or "",
                 "certificates": [{
-                    "certificateFile": "/data/certs/cert.pem",
-                    "keyFile":         "/data/certs/key.pem",
+                    "certificateFile": XRAY_CERT_FILE,
+                    "keyFile":         XRAY_KEY_FILE,
                 }],
                 "alpn": ["http/1.1"],
             }
