@@ -389,6 +389,7 @@ a{color:inherit;text-decoration:none}
       <div class="fg" style="flex:1;min-width:140px"><label>عنوان</label><input class="fi" id="nl-label" placeholder="مثلاً: کاربر علی" style="width:100%"></div>
       <div class="fg"><label>پروتکل</label>
         <select class="fs" id="nl-proto" onchange="onProtoChange()">
+          <option value="siz10a">SIZ10A ⚡</option>
           <option value="vless">VLESS</option>
           <option value="trojan">Trojan</option>
           <option value="hysteria2">Hysteria2</option>
