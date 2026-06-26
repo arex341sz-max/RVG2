@@ -6,10 +6,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ARG XRAY_VERSION=v25.1.30
 RUN wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" -O /tmp/xray.zip \
-    && unzip -q /tmp/xray.zip -d /tmp \
-    && mv /tmp/xray /usr/local/bin/xray \
+    && unzip -q /tmp/xray.zip -d /tmp/xray-extracted \
+    && mv /tmp/xray-extracted/xray /usr/local/bin/xray \
     && chmod +x /usr/local/bin/xray \
-    && rm -rf /tmp/*
+    && rm -rf /tmp/xray.zip /tmp/xray-extracted
+
+# ✅ دانلود geoip و geosite که Xray برای routing نیاز داره
+RUN mkdir -p /usr/local/share/xray \
+    && wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/geoip.dat" \
+            -O /usr/local/share/xray/geoip.dat \
+    && wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/geosite.dat" \
+            -O /usr/local/share/xray/geosite.dat
 
 WORKDIR /app
 COPY requirements.txt .
@@ -17,13 +24,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# ✅ cert داخل /app/certs — داخل image، نه volume /data
-RUN mkdir -p /app/certs \
+# ✅ cert داخل /data/certs — همان مسیری که config.py تعریف کرده
+RUN mkdir -p /data/certs \
     && openssl req -x509 -newkey rsa:2048 -nodes \
-       -keyout /app/certs/key.pem \
-       -out    /app/certs/cert.pem \
+       -keyout /data/certs/key.pem \
+       -out    /data/certs/cert.pem \
        -days   3650 \
-       -subj   "/CN=rvg-gateway" 2>/dev/null
+       -subj   "/CN=rvg-gateway" 2>/dev/null \
+    && echo "✅ Default cert baked into image at /data/certs/"
 
 EXPOSE 8000
 
