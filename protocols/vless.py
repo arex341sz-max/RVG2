@@ -107,7 +107,8 @@ class VLESSProtocol(BaseProtocol):
         return f"vless://{uuid}@{host}:{port}?{q}#{quote(remark)}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
-        uuid   = kw.get("uuid", "")
+        # FIX: از pop استفاده می‌کنیم تا uuid تکراری نشه در _build_stream
+        uuid   = kw.pop("uuid", "")
         stream = kw.pop("stream", "ws")
         tls    = kw.pop("tls", True)
         flow   = "xtls-rprx-vision" if stream == "tcp" and kw.get("reality") else ""
