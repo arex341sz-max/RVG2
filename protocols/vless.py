@@ -104,7 +104,7 @@ class VLESSProtocol(BaseProtocol):
         stream = kw.pop("stream", "ws")
         tls    = kw.pop("tls", True)
         return {
-            "listen":   "127.0.0.1",
+            "listen":   "0.0.0.0",  # ✅ FIXED: Changed from 127.0.0.1 to 0.0.0.0
             "port":     port,
             "protocol": "vless",
             "settings": {
