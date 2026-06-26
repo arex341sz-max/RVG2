@@ -1,5 +1,6 @@
 """protocols/hysteria2.py"""
 from urllib.parse import quote
+from config import XRAY_CERT_FILE, XRAY_KEY_FILE
 from .base import BaseProtocol
 
 
@@ -43,8 +44,8 @@ class Hysteria2Protocol(BaseProtocol):
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
         inbound = {
-            "listen": "0.0.0.0",   # Hysteria2 باید مستقیم expose بشه (UDP)
-            "port":   port,
+            "listen":   "0.0.0.0",   # Hysteria2 باید مستقیم expose بشه (UDP)
+            "port":     port,
             "protocol": "hysteria2",
             "settings": {
                 "clients": [{"password": kw.get("password", "")}],
@@ -55,8 +56,10 @@ class Hysteria2Protocol(BaseProtocol):
                 "security": "tls",
                 "tlsSettings": {
                     "serverName":   kw.get("sni", ""),
-                    "certificates": [{"certificateFile": "/data/certs/cert.pem",
-                                      "keyFile":         "/data/certs/key.pem"}],
+                    "certificates": [{
+                        "certificateFile": XRAY_CERT_FILE,
+                        "keyFile":         XRAY_KEY_FILE,
+                    }],
                     "alpn": ["h3"],
                 },
             },
