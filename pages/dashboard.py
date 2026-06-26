@@ -649,7 +649,24 @@ function usageBar(l) {
 // ✅ اصلاح شده: استفاده از data attribute به جای inline string
 function cpText(elId, text) {
   const t = text || (document.getElementById(elId) ? document.getElementById(elId).textContent : '') || '';
-  navigator.clipboard.writeText(t).then(() => toast('کپی شد', 'ok')).catch(() => toast('خطا در کپی', 'err'));
+  if (!t) { toast('لینک خالی است', 'err'); return; }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(t).then(() => toast('کپی شد', 'ok')).catch(() => _fallbackCopy(t));
+  } else {
+    _fallbackCopy(t);
+  }
+}
+function _fallbackCopy(t) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.cssText = 'position:fixed;top:-999px;left:-999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    ok ? toast('کپی شد', 'ok') : toast('خطا در کپی', 'err');
+  } catch(e) { toast('خطا در کپی', 'err'); }
 }
 
 function cpSubAll() { cpText(null, document.getElementById('sub-all-url').textContent); }
