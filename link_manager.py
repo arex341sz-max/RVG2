@@ -82,6 +82,11 @@ def generate_link_url(link: dict, host: str) -> str:
     protocol_name = link.get("protocol", "vless")
     try:
         proto = get_protocol(protocol_name)
+        # کلیدهایی که صریح پاس میشن را از stream_params حذف کن تا تکراری نشن
+        _explicit = {"password", "uuid", "host", "port", "stream", "tls", "sni",
+                     "fingerprint", "alpn", "remark", "reality", "reality_pbk",
+                     "reality_sid", "reality_sni", "reality_fingerprint"}
+        sp = {k: v for k, v in link.get("stream_params", {}).items() if k not in _explicit}
         return proto.generate_link(
             password=link.get("secret", link["uuid"]),
             uuid=link["uuid"],
@@ -98,7 +103,9 @@ def generate_link_url(link: dict, host: str) -> str:
             reality_sid=link.get("reality_sid", ""),
             reality_sni=link.get("reality_sni", ""),
             reality_fingerprint=link.get("reality_fingerprint", "chrome"),
-            **link.get("stream_params", {}),
+            **sp,
         )
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger("RVG.link_manager").error(f"generate_link_url failed for {protocol_name}: {e}")
         return ""
