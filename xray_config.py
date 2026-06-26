@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 from config      import XRAY_BIN, XRAY_MAIN_CFG
-from xray_config import write_xray_config
 
 logger = logging.getLogger("RVG.xray")
 
