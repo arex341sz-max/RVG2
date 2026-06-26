@@ -17,7 +17,7 @@ class VMessProtocol(BaseProtocol):
     stream_modes = {
         "ws":          {"label": "WebSocket",   "icon": "ti-webhook",            "desc": "عبور از فایروال",
                         "params": [
-                            {"key": "path", "label": "مسیر", "placeholder": "/ws",          "default": "/ws"},
+                            {"key": "path", "label": "مسیر", "placeholder": "/ws/{uuid}", "default": "/ws"},
                             {"key": "host", "label": "Host",  "placeholder": "example.com",  "default": ""},
                         ]},
         "tcp":         {"label": "TCP",          "icon": "ti-arrows-transfer-down","desc": "مستقیم", "params": []},
@@ -32,25 +32,21 @@ class VMessProtocol(BaseProtocol):
                         ]},
     }
 
-    def generate_link(
-        self,
-        uuid: str,
-        host: str,
-        port: int,
-        stream: str = "ws",
-        tls: bool = True,
-        sni: str = "",
-        fingerprint: str = "chrome",
-        alpn: str = "http/1.1",
-        remark: str = "RVG",
-        **sp,
-    ) -> str:
+    def generate_link(self, uuid: str, host: str, port: int,
+                      stream: str = "ws", tls: bool = True,
+                      sni: str = "", fingerprint: str = "chrome",
+                      alpn: str = "http/1.1", remark: str = "RVG", **sp) -> str:
+        # ✅ FIX: اگه ws و path پیش‌فرضه، UUID رو اضافه کن
+        ws_path = sp.get("path", "/ws")
+        if stream == "ws" and ws_path in ("/ws", "") and uuid:
+            ws_path = f"/ws/{uuid}"
+
         vmess = {
             "v": "2", "ps": remark, "add": host, "port": str(port),
             "id": uuid, "aid": "0", "scy": "auto",
             "net": stream, "type": "none",
             "host": sp.get("host", "") or host,
-            "path": sp.get("path", "") or "/",
+            "path": ws_path if stream == "ws" else (sp.get("path", "") or "/"),
             "tls": "tls" if tls else "none",
             "sni": sni or host, "alpn": alpn, "fp": fingerprint,
         }
@@ -63,26 +59,31 @@ class VMessProtocol(BaseProtocol):
         return f"vmess://{encoded}"
 
     def get_xray_inbound(self, port: int, **kw) -> dict:
+        uuid   = kw.pop("uuid", "")
         stream = kw.pop("stream", "ws")
         tls    = kw.pop("tls", True)
         return {
-            "listen": "127.0.0.1",
-            "port":   port,
+            "listen":   "0.0.0.0",  # ✅ FIX: بود 127.0.0.1
+            "port":     port,
             "protocol": "vmess",
             "settings": {
-                "clients": [{"id": kw.pop("uuid", ""), "alterId": 0}],
+                "clients": [{"id": uuid, "alterId": 0}],
             },
-            "streamSettings": self._stream(stream, tls, **kw),
+            "streamSettings": self._stream(stream, tls, uuid=uuid, **kw),
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         }
 
     def _stream(self, stream: str, tls: bool, **kw) -> dict:
+        uuid = kw.get("uuid", "")
         ss = {"network": stream}
         if stream == "tcp":
             ss["tcpSettings"] = {"header": {"type": "none"}}
         elif stream == "ws":
+            # ✅ FIX: path رو /ws/{uuid} بساز
+            raw_path = kw.get("path", "/ws")
+            ws_path = f"/ws/{uuid}" if raw_path in ("/ws", "") and uuid else raw_path
             ss["wsSettings"] = {
-                "path": kw.get("path", "/ws"),
+                "path": ws_path,
                 "headers": {"Host": kw.get("host", "")} if kw.get("host") else {},
             }
         elif stream == "grpc":
