@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from auth             import init_auth, is_valid_session, SESSION_COOKIE
 from config           import PORT, PUBLIC_DOMAIN, XRAY_CERT_DIR, XRAY_CERT_FILE, XRAY_KEY_FILE
 from core.persistence import load_state, save_state
-from core.ws_relay    import handle_ws
+from core.ws_relay    import handle_ws, handle_http_proxy
 from link_manager     import (
     generate_uuid, protocol_defaults, generate_link_url, is_allowed, fmt_bytes, PROTOCOLS_INFO,
 )
@@ -52,26 +52,16 @@ _http: httpx.AsyncClient | None = None
 
 def _ensure_self_signed_cert() -> bool:
     import subprocess
-
-    cert_file = XRAY_CERT_FILE
-    key_file  = XRAY_KEY_FILE
-
-    if os.path.exists(cert_file) and os.path.exists(key_file):
+    if os.path.exists(XRAY_CERT_FILE) and os.path.exists(XRAY_KEY_FILE):
         logger.info(f"🔐 Cert already exists → {XRAY_CERT_DIR}/")
         return True
-
     os.makedirs(XRAY_CERT_DIR, exist_ok=True)
     try:
-        result = subprocess.run(
-            [
-                "openssl", "req", "-x509", "-newkey", "rsa:2048",
-                "-keyout", key_file, "-out", cert_file,
-                "-days", "3650", "-nodes",
-                "-subj", "/CN=rvg-gateway"
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048",
+             "-keyout", XRAY_KEY_FILE, "-out", XRAY_CERT_FILE,
+             "-days", "3650", "-nodes", "-subj", "/CN=rvg-gateway"],
+            check=True, capture_output=True, text=True,
         )
         logger.info(f"🔐 Self-signed cert generated → {XRAY_CERT_DIR}/")
         return True
@@ -79,7 +69,7 @@ def _ensure_self_signed_cert() -> bool:
         logger.error(f"❌ openssl failed (rc={e.returncode}): {e.stderr.strip()}")
         return False
     except FileNotFoundError:
-        logger.error("❌ openssl not found — install openssl in Dockerfile")
+        logger.error("❌ openssl not found")
         return False
     except Exception as e:
         logger.error(f"❌ Cert generation error: {e}")
@@ -104,6 +94,7 @@ async def startup():
 
     logger.info(f"🚀 RVG Gateway v10 — port {PORT}")
     logger.info(f"📡 Protocols: {', '.join(PROTOCOLS_INFO)}")
+    logger.info("🔀 Architecture: FastAPI(public) → Xray(127.0.0.1:10xxx)")
 
 
 @app.on_event("shutdown")
@@ -125,22 +116,22 @@ async def _ensure_default_link():
         if uid not in LINKS:
             defaults = protocol_defaults("vless")
             LINKS[uid] = {
-                "uuid":         uid,
-                "secret":       uid,
+                "uuid":          uid,
+                "secret":        uid,
                 **defaults,
-                "stream":       "ws",
-                "label":        "لینک پیش‌فرض",
-                "port":         443,
-                "limit_bytes":  0,
-                "used_bytes":   0,
-                "created_at":   datetime.now().isoformat(),
-                "active":       True,
-                "expires_at":   None,
-                "note":         "",
-                "is_default":   True,
-                "sub_id":       None,
-                "xray_port":    None,
-                "stream_params": {"path": f"/ws/{uid}"},  # ✅ FIX
+                "stream":        "ws",
+                "label":         "لینک پیش‌فرض",
+                "port":          443,
+                "limit_bytes":   0,
+                "used_bytes":    0,
+                "created_at":    datetime.now().isoformat(),
+                "active":        True,
+                "expires_at":    None,
+                "note":          "",
+                "is_default":    True,
+                "sub_id":        None,
+                "xray_port":     None,   # default link توسط FastAPI handle میشه، نه Xray
+                "stream_params": {"path": f"/ws/{uid}"},
             }
             asyncio.create_task(save_state())
 
@@ -149,16 +140,11 @@ async def _ensure_default_link():
 
 @app.websocket("/ws/{uuid}")
 async def websocket_endpoint(ws: WebSocket, uuid: str):
-    """مسیر اصلی: /ws/{uuid}"""
     await handle_ws(ws, uuid)
 
 
 @app.websocket("/ws")
 async def websocket_plain(ws: WebSocket):
-    """
-    ✅ FIX: مسیر fallback /ws — UUID رو از query param یا header میگیره.
-    کلاینت‌هایی که path=/ws دارن و UUID جدا ارسال میکنن اینجا میان.
-    """
     uuid = ws.query_params.get("uuid") or ws.query_params.get("ed")
     if not uuid:
         uuid = ws.headers.get("x-uuid") or ws.headers.get("X-UUID")
@@ -169,13 +155,93 @@ async def websocket_plain(ws: WebSocket):
             if len(part) == 36 and part.count("-") == 4:
                 uuid = part
                 break
-
     if not uuid:
         logger.warning("🚫 WS /ws rejected — no UUID provided")
         await ws.close(code=1008, reason="UUID required")
         return
-
     await handle_ws(ws, uuid)
+
+
+# ── Dynamic WS endpoints — بر اساس path لینک‌ها ─────────────────────────────
+@app.websocket("/xhttp/{uuid}")
+async def ws_xhttp(ws: WebSocket, uuid: str):
+    """XHTTP transport WS endpoint"""
+    await handle_ws(ws, uuid)
+
+
+@app.websocket("/upgrade/{uuid}")
+async def ws_httpupgrade(ws: WebSocket, uuid: str):
+    """HTTPUpgrade transport WS endpoint"""
+    await handle_ws(ws, uuid)
+
+
+@app.websocket("/siz/{uuid}")
+async def ws_siz(ws: WebSocket, uuid: str):
+    """SIZ10A WS endpoint"""
+    await handle_ws(ws, uuid)
+
+
+# ── Catch-all WS endpoint — UUID رو از path استخراج می‌کنه ──────────────────
+@app.middleware("http")
+async def xray_http_proxy_middleware(request: Request, call_next):
+    """
+    HTTP requests رو که به Xray inbound‌ها تعلق دارن (XHTTP/HTTPUpgrade)
+    به Xray local port forward می‌کنه.
+    """
+    path = request.url.path
+
+    # API و dashboard رو skip کن
+    if (path.startswith("/api/") or path.startswith("/sub") or
+            path in ("/", "/login", "/dashboard") or path.startswith("/p/")):
+        return await call_next(request)
+
+    # پیدا کردن لینک بر اساس path
+    target_link = None
+    target_uuid = None
+
+    async with LINKS_LOCK:
+        for uuid, link in LINKS.items():
+            if link.get("is_default"):
+                continue
+            sp = link.get("stream_params", {})
+            link_path = sp.get("path", "")
+            service   = sp.get("serviceName", "")
+
+            if link_path and path.startswith(link_path):
+                target_link = link
+                target_uuid = uuid
+                break
+            if service and path.startswith(f"/{service}"):
+                target_link = link
+                target_uuid = uuid
+                break
+
+    if not target_link or not target_link.get("xray_port"):
+        return await call_next(request)
+
+    from link_manager import is_allowed as _is_allowed_link
+    if not _is_allowed_link(target_link):
+        return Response(status_code=403)
+
+    xray_port = target_link["xray_port"]
+    body = await request.body()
+    headers = dict(request.headers)
+
+    status, resp_headers, content = await handle_http_proxy(
+        uuid=target_uuid,
+        method=request.method,
+        path=path,
+        headers=headers,
+        body=body,
+        xray_port=xray_port,
+    )
+
+    # hop-by-hop headers حذف کن
+    _HOP = {"connection", "keep-alive", "transfer-encoding", "te",
+            "trailers", "upgrade", "content-encoding", "content-length"}
+    clean_headers = {k: v for k, v in resp_headers.items() if k.lower() not in _HOP}
+
+    return Response(content=content, status_code=status, headers=clean_headers)
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
@@ -227,7 +293,7 @@ async def root():
 async def login_page(request: Request):
     if await is_valid_session(request.cookies.get(SESSION_COOKIE)):
         return RedirectResponse("/dashboard")
-    from pages.login  import HTML as LOGIN_HTML
+    from pages.login import HTML as LOGIN_HTML
     return HTMLResponse(content=LOGIN_HTML)
 
 @app.get("/dashboard", response_class=HTMLResponse)
