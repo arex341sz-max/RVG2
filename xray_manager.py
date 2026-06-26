@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 
 from config      import XRAY_BIN, XRAY_MAIN_CFG, XRAY_CERT_FILE, XRAY_KEY_FILE
-from xray_config import write_xray_config
 
 logger = logging.getLogger("RVG.xray")
 
@@ -63,6 +62,9 @@ def _preflight_check() -> list[str]:
 
 async def start_xray() -> bool:
     global _process, _start_time, _running
+    
+    # Import locally to avoid circular import
+    from xray_config import write_xray_config
 
     await write_xray_config()
     errors = _preflight_check()
@@ -181,6 +183,9 @@ async def restart_xray() -> bool:
 
 
 async def reload_xray() -> bool:
+    # Import locally to avoid circular import
+    from xray_config import write_xray_config
+    
     if not is_running():
         return await restart_xray()
     await write_xray_config()
