@@ -1,4 +1,4 @@
-"""routers/api_links.py — CRUD کامل لینک‌ها با بهبودی‌های امنیتی"""
+"""routers/api_links.py — CRUD کامل لینک‌ها"""
 import asyncio
 from datetime import datetime, timedelta
 
@@ -25,13 +25,32 @@ def _host() -> str:
 
 
 def _check_port_conflict(new_port: int, exclude_uuid: str = None) -> bool:
-    """بررسی اینکه پورت قبلاً در استفاده است یا نه"""
     for uid, link in LINKS.items():
         if exclude_uuid and uid == exclude_uuid:
             continue
         if link.get("port") == new_port:
             return True
     return False
+
+
+def _build_stream_params(protocol: str, stream: str, body: dict, uid: str) -> dict:
+    """
+    stream_params رو از body بخون — اگه نبود، default های مناسب بساز.
+    path پیش‌فرض = /{stream}/{uuid} تا هر کانفیگ path یکتا داشته باشه.
+    """
+    sp = body.get("stream_params", {})
+    if not sp:
+        sp = {}
+
+    # اگه path داده نشده، یه path یکتا بساز
+    if stream in ("ws", "xhttp", "httpupgrade") and not sp.get("path"):
+        prefix = {"ws": "ws", "xhttp": "xhttp", "httpupgrade": "up"}.get(stream, stream)
+        sp["path"] = f"/{prefix}/{uid}"
+
+    if stream == "grpc" and not sp.get("serviceName"):
+        sp["serviceName"] = f"grpc-{uid[:8]}"
+
+    return sp
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
@@ -46,7 +65,6 @@ async def create_link(request: Request, _=Depends(require_auth)):
     sub_id   = body.get("sub_id") or None
     port     = int(body.get("port", 0))
     reality  = bool(body.get("reality", False))
-    stream_params = body.get("stream_params", {})
 
     lv = float(body.get("limit_value") or 0)
     lu = body.get("limit_unit") or "GB"
@@ -76,14 +94,16 @@ async def create_link(request: Request, _=Depends(require_auth)):
         elif tls: port = 443
         else: port = 80
 
-    # ✅ FIXED: بررسی تکراری نبودن پورت
     async with LINKS_LOCK:
         if _check_port_conflict(port):
-            raise HTTPException(400, 
+            raise HTTPException(400,
                 f"❌ پورت {port} قبلاً در استفاده است. لطفاً پورت دیگری انتخاب کنید")
 
     uid    = generate_uuid()
     secret = generate_secret(protocol)
+
+    # ✅ FIX: stream_params با path یکتا بر اساس uuid
+    stream_params = _build_stream_params(protocol, stream, body, uid)
 
     entry = {
         "uuid":                uid,
@@ -110,7 +130,7 @@ async def create_link(request: Request, _=Depends(require_auth)):
         "sni":                 body.get("sni", ""),
         "fingerprint":         body.get("fingerprint", "chrome"),
         "alpn":                body.get("alpn", "h3" if protocol == "hysteria2" else "http/1.1"),
-        "xray_port":           None,   # بعد از reload تعیین می‌شه
+        "xray_port":           None,   # بعد از reload توسط xray_config.py تعیین میشه
     }
 
     async with LINKS_LOCK:
@@ -123,7 +143,7 @@ async def create_link(request: Request, _=Depends(require_auth)):
                 if uid not in ids:
                     ids.append(uid)
 
-    # reload Xray (بدون restart — SIGHUP)
+    # reload Xray — این xray_port رو هم assign می‌کنه
     asyncio.create_task(reload_xray())
     asyncio.create_task(save_state())
 
@@ -190,7 +210,13 @@ async def update_link(uid: str, request: Request, _=Depends(require_auth)):
         if "stream" in body:
             proto = get_protocol(link["protocol"])
             if body["stream"] in proto.stream_modes:
+                old_stream = link["stream"]
                 link["stream"] = body["stream"]
+                # اگه stream عوض شد، stream_params رو reset کن و path جدید بساز
+                if old_stream != body["stream"] and not body.get("stream_params"):
+                    link["stream_params"] = _build_stream_params(
+                        link["protocol"], link["stream"], {}, uid
+                    )
 
         if "tls" in body:
             proto = get_protocol(link["protocol"])
@@ -201,11 +227,10 @@ async def update_link(uid: str, request: Request, _=Depends(require_auth)):
             link["stream_params"] = body["stream_params"]
 
         if "port" in body:
-            # ✅ FIXED: بررسی پورت جدید برای conflict
             new_port = int(body["port"])
             if _check_port_conflict(new_port, exclude_uuid=uid):
-                raise HTTPException(400, 
-                    f"❌ پورت {new_port} قبلاً در استفاده است. لطفاً پورت دیگری انتخاب کنید")
+                raise HTTPException(400,
+                    f"❌ پورت {new_port} قبلاً در استفاده است")
             link["port"] = new_port
 
         new_sub = body.get("sub_id", "UNCHANGED")
@@ -249,46 +274,50 @@ async def delete_link(uid: str, _=Depends(require_auth)):
     return {"ok": True, "deleted": uid}
 
 
-# ── Clone/Duplicate ──────────────────────────────────────────────────────────
+# ── Clone ─────────────────────────────────────────────────────────────────────
 @router.post("/api/links/{uid}/clone")
 async def clone_link(uid: str, _=Depends(require_auth)):
-    """✅ کپی/کلون کردن یک کانفیگ موجود"""
     async with LINKS_LOCK:
         if uid not in LINKS:
             raise HTTPException(404, "کانفیگ پیدا نشد")
-        
+
         original = LINKS[uid]
-        
-        # پورت جدید را پیدا کن
         new_port = original.get("port", 443)
         port_attempts = 0
         while _check_port_conflict(new_port) and port_attempts < 100:
             new_port += 1
             port_attempts += 1
-        
         if port_attempts >= 100:
             raise HTTPException(500, "نمی‌توان پورت مناسب پیدا کرد")
-        
-        # UUID و Secret جدید
-        new_uid = generate_uuid()
+
+        new_uid    = generate_uuid()
         new_secret = generate_secret(original.get("protocol", "vless"))
-        
-        # کپی کردن تمام فیلدها
+
+        # ✅ FIX: path یکتا برای clone هم بساز
+        old_sp = dict(original.get("stream_params", {}))
+        new_sp = dict(old_sp)
+        stream = original.get("stream", "ws")
+        if stream in ("ws", "xhttp", "httpupgrade"):
+            prefix = {"ws": "ws", "xhttp": "xhttp", "httpupgrade": "up"}.get(stream, stream)
+            new_sp["path"] = f"/{prefix}/{new_uid}"
+        if stream == "grpc":
+            new_sp["serviceName"] = f"grpc-{new_uid[:8]}"
+
         new_link = {
             **original,
-            "uuid": new_uid,
-            "secret": new_secret,
-            "port": new_port,
-            "label": f"{original.get('label', 'لینک')} (کپی)",
-            "created_at": datetime.now().isoformat(),
-            "used_bytes": 0,  # شمارنده استفاده را ریست کن
-            "is_default": False,
-            "xray_port": None,  # بعد تعیین می‌شود
+            "uuid":         new_uid,
+            "secret":       new_secret,
+            "port":         new_port,
+            "label":        f"{original.get('label', 'لینک')} (کپی)",
+            "created_at":   datetime.now().isoformat(),
+            "used_bytes":   0,
+            "is_default":   False,
+            "xray_port":    None,
+            "stream_params": new_sp,
         }
-        
+
         LINKS[new_uid] = new_link
-        
-        # اگر subscription دارد، آن را هم اپدیت کن
+
         sub_id = original.get("sub_id")
         if sub_id:
             async with SUBS_LOCK:
@@ -296,17 +325,15 @@ async def clone_link(uid: str, _=Depends(require_auth)):
                     ids = SUBS[sub_id].setdefault("link_ids", [])
                     if new_uid not in ids:
                         ids.append(new_uid)
-    
+
     asyncio.create_task(reload_xray())
     asyncio.create_task(save_state())
-    
-    host = _host()
+
+    host     = _host()
     link_url = generate_link_url(new_link, host)
     return {
-        "uuid": new_uid,
-        **new_link,
-        "expired": False,
+        "uuid": new_uid, **new_link, "expired": False,
         "link_url": link_url,
         "sub_url": f"https://{host}/sub/{new_uid}",
-        "message": f"✅ کانفیگ با موفقیت کپی شد - پورت تخصیص‌داده‌شده: {new_port}",
+        "message": f"✅ کانفیگ کپی شد — پورت: {new_port}",
     }
