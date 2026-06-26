@@ -1,11 +1,12 @@
-"""xray_manager.py — مدیریت Xray با لاگ‌گیری دقیق stderr"""
+"""xray_manager.py — مدیریت Xray با لاگ‌گیری دقیق و کامل"""
 import asyncio
 import logging
+import os
 import signal
 import time
 from pathlib import Path
 
-from config      import XRAY_BIN, XRAY_MAIN_CFG
+from config      import XRAY_BIN, XRAY_MAIN_CFG, XRAY_CERT_FILE, XRAY_KEY_FILE
 from xray_config import write_xray_config
 
 logger = logging.getLogger("RVG.xray")
@@ -30,70 +31,127 @@ def get_status() -> dict:
         "bin":           XRAY_BIN,
         "config":        XRAY_MAIN_CFG,
         "bin_exists":    Path(XRAY_BIN).exists(),
+        "cert_exists":   Path(XRAY_CERT_FILE).exists(),
+        "key_exists":    Path(XRAY_KEY_FILE).exists(),
     }
+
+
+def _preflight_check() -> list[str]:
+    """بررسی همه پیش‌نیازها قبل از start — لیست خطاها رو برمی‌گردونه"""
+    errors = []
+    if not Path(XRAY_BIN).exists():
+        errors.append(f"Xray binary not found: {XRAY_BIN}")
+    else:
+        if not os.access(XRAY_BIN, os.X_OK):
+            errors.append(f"Xray binary is not executable: {XRAY_BIN}")
+
+    if not Path(XRAY_CERT_FILE).exists():
+        errors.append(f"TLS cert not found: {XRAY_CERT_FILE}")
+    if not Path(XRAY_KEY_FILE).exists():
+        errors.append(f"TLS key not found: {XRAY_KEY_FILE}")
+
+    cfg_path = Path(XRAY_MAIN_CFG)
+    if cfg_path.exists():
+        import json
+        try:
+            with open(cfg_path) as f:
+                json.load(f)
+        except Exception as e:
+            errors.append(f"Xray config JSON is invalid: {e}")
+    return errors
 
 
 async def start_xray() -> bool:
     global _process, _start_time, _running
 
-    if not Path(XRAY_BIN).exists():
-        logger.error(f"❌ Xray binary not found: {XRAY_BIN}")
-        return False
-
     await write_xray_config()
+    errors = _preflight_check()
+    if errors:
+        logger.error("═══ Xray PREFLIGHT FAILED ══════════════════")
+        for e in errors:
+            logger.error(f"  ✗ {e}")
+        logger.error("════════════════════════════════════════════")
+        return False
 
     try:
         _process = await asyncio.create_subprocess_exec(
             XRAY_BIN, "run", "-c", XRAY_MAIN_CFG,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "XRAY_LOCATION_ASSET": "/usr/local/share/xray"},
         )
         _start_time = time.time()
         _running    = True
         logger.info(f"🚀 Xray started — PID {_process.pid}")
 
-        # stderr رو در background بخون تا buffer پر نشه
+        stdout_lines: list[str] = []
         stderr_lines: list[str] = []
 
-        async def _collect_stderr():
+        async def _collect(stream, bucket):
             try:
-                async for line in _process.stderr:
+                async for line in stream:
                     text = line.decode("utf-8", errors="replace").rstrip()
                     if text:
-                        stderr_lines.append(text)
+                        bucket.append(text)
             except Exception:
                 pass
 
-        stderr_task = asyncio.create_task(_collect_stderr())
+        stdout_task = asyncio.create_task(_collect(_process.stdout, stdout_lines))
+        stderr_task = asyncio.create_task(_collect(_process.stderr, stderr_lines))
+
         await asyncio.sleep(3)
 
         if _process.returncode is not None:
             try:
-                await asyncio.wait_for(stderr_task, timeout=2.0)
+                await asyncio.wait_for(
+                    asyncio.gather(stdout_task, stderr_task), timeout=2.0
+                )
             except asyncio.TimeoutError:
+                stdout_task.cancel()
                 stderr_task.cancel()
 
-            # ✅ لاگ کامل و واضح stderr
+            logger.error(f"❌ Xray crashed — exit code: {_process.returncode}")
+            logger.error(f"   Binary  : {XRAY_BIN}")
+            logger.error(f"   Config  : {XRAY_MAIN_CFG}")
+            logger.error(f"   Cert    : {XRAY_CERT_FILE} (exists={Path(XRAY_CERT_FILE).exists()})")
+            logger.error(f"   Key     : {XRAY_KEY_FILE} (exists={Path(XRAY_KEY_FILE).exists()})")
+
+            if stdout_lines:
+                logger.error("── Xray STDOUT ──────────────────────────────")
+                for line in stdout_lines:
+                    logger.error(f"  {line}")
+            else:
+                logger.error("── Xray STDOUT: (empty)")
+
             if stderr_lines:
-                logger.error("═══ Xray STDERR ══════════════════════")
+                logger.error("── Xray STDERR ──────────────────────────────")
                 for line in stderr_lines:
                     logger.error(f"  {line}")
-                logger.error("══════════════════════════════════════")
             else:
-                logger.error("(Xray stderr was empty)")
+                logger.error("── Xray STDERR: (empty)")
 
-            logger.error(f"❌ Xray crashed (rc={_process.returncode})")
+            try:
+                import json
+                with open(XRAY_MAIN_CFG) as f:
+                    cfg = json.load(f)
+                logger.error(f"── Xray CONFIG (inbounds count={len(cfg.get('inbounds', []))}) ──")
+                for ib in cfg.get("inbounds", []):
+                    logger.error(f"  inbound tag={ib.get('tag')} proto={ib.get('protocol')} "
+                                 f"port={ib.get('port')} listen={ib.get('listen')}")
+            except Exception as ce:
+                logger.error(f"── Could not read config: {ce}")
+
+            logger.error("─────────────────────────────────────────────")
             return False
 
-        asyncio.create_task(_pipe_stdout(_process.stdout))
-        stderr_task.cancel()
-        asyncio.create_task(_pipe_stderr_bg(stderr_lines))
+        asyncio.create_task(_pipe_stdout(_process.stdout, stdout_lines, stdout_task))
+        asyncio.create_task(_pipe_stderr(_process.stderr, stderr_lines, stderr_task))
 
         logger.info("✅ Xray is running")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Failed to start Xray: {e}")
+        logger.error(f"❌ Failed to start Xray: {e}", exc_info=True)
         return False
 
 
@@ -146,7 +204,7 @@ async def monitor_loop() -> None:
             consecutive += 1
             backoff = min(consecutive * 3, 45)
             if backoff > 5:
-                logger.warning(f"⏳ Backoff {backoff}s...")
+                logger.warning(f"⏳ Backoff {backoff}s (attempt #{consecutive})...")
                 await asyncio.sleep(backoff)
             ok = await start_xray()
             if ok:
@@ -158,7 +216,6 @@ async def monitor_loop() -> None:
 async def start_monitor() -> None:
     global _monitor_task
     ok = await start_xray()
-    # حتی اگه start نشد monitor رو شروع کن تا retry کنه
     _monitor_task = asyncio.create_task(monitor_loop())
 
 
@@ -174,7 +231,10 @@ async def stop_monitor() -> None:
     await stop_xray()
 
 
-async def _pipe_stdout(stream) -> None:
+async def _pipe_stdout(stream, already: list[str], task: asyncio.Task) -> None:
+    for line in already:
+        logger.info(f"[xray] {line}")
+    task.cancel()
     try:
         async for line in stream:
             text = line.decode("utf-8", errors="replace").rstrip()
@@ -184,14 +244,14 @@ async def _pipe_stdout(stream) -> None:
         pass
 
 
-async def _pipe_stderr_bg(already_collected: list[str]) -> None:
-    for line in already_collected:
+async def _pipe_stderr(stream, already: list[str], task: asyncio.Task) -> None:
+    for line in already:
         logger.warning(f"[xray/ERR] {line}")
-    if _process and _process.stderr:
-        try:
-            async for line in _process.stderr:
-                text = line.decode("utf-8", errors="replace").rstrip()
-                if text:
-                    logger.warning(f"[xray/ERR] {text}")
-        except Exception:
-            pass
+    task.cancel()
+    try:
+        async for line in stream:
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if text:
+                logger.warning(f"[xray/ERR] {text}")
+    except Exception:
+        pass
