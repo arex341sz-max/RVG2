@@ -11,11 +11,11 @@ RUN wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}
     && chmod +x /usr/local/bin/xray \
     && rm -rf /tmp/xray.zip /tmp/xray-extracted
 
-# ✅ دانلود geoip و geosite که Xray برای routing نیاز داره
+# ✅ geoip و geosite از ریپوی مخصوص v2fly (همیشه آپدیت و stable)
 RUN mkdir -p /usr/local/share/xray \
-    && wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/geoip.dat" \
+    && wget -q "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" \
             -O /usr/local/share/xray/geoip.dat \
-    && wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/geosite.dat" \
+    && wget -q "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" \
             -O /usr/local/share/xray/geosite.dat
 
 WORKDIR /app
@@ -30,9 +30,8 @@ RUN mkdir -p /data/certs \
        -keyout /data/certs/key.pem \
        -out    /data/certs/cert.pem \
        -days   3650 \
-       -subj   "/CN=rvg-gateway" 2>/dev/null \
-    && echo "✅ Default cert baked into image at /data/certs/"
+       -subj   "/CN=rvg-gateway" 2>/dev/null
 
-EXPOSE 8000
+EXPOSE 8080
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
