@@ -1,5 +1,6 @@
 """protocols/base.py — کلاس پایه برای همه پروتکل‌ها"""
 from abc import ABC, abstractmethod
+from config import XRAY_CERT_FILE, XRAY_KEY_FILE
 
 
 class BaseProtocol(ABC):
@@ -21,11 +22,12 @@ class BaseProtocol(ABC):
         """تولید بلاک inbound برای Xray JSON config"""
 
     def _build_tls_settings(self, sni: str, alpn: list[str] | None = None) -> dict:
+        # ✅ مسیر cert از config مرکزی — نه hardcode
         return {
             "serverName": sni,
             "certificates": [
-                {"certificateFile": "/data/certs/cert.pem",
-                 "keyFile":  "/data/certs/key.pem"}
+                {"certificateFile": XRAY_CERT_FILE,
+                 "keyFile":         XRAY_KEY_FILE}
             ],
             "alpn": alpn or ["http/1.1"],
         }
