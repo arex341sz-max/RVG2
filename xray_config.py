@@ -1,196 +1,113 @@
-"""xray_manager.py — مدیریت Xray با لاگ‌گیری دقیق stderr"""
-import asyncio
+"""xray_config.py"""
+import json
 import logging
-import signal
-import time
+from datetime import datetime
 from pathlib import Path
 
-from config      import XRAY_BIN, XRAY_MAIN_CFG
+from config    import XRAY_MAIN_CFG, XRAY_PORT_BASE
+from state     import LINKS, LINKS_LOCK
+from protocols import get_protocol
 
-logger = logging.getLogger("RVG.xray")
+logger = logging.getLogger("RVG.xray_config")
 
-_process:       asyncio.subprocess.Process | None = None
-_start_time:    float = 0.0
-_restart_count: int   = 0
-_running:       bool  = False
-_monitor_task:  asyncio.Task | None = None
-
-
-def is_running() -> bool:
-    return _process is not None and _process.returncode is None
+_PORT_MAP: dict[str, int] = {}
+_NEXT_PORT = XRAY_PORT_BASE
 
 
-def get_status() -> dict:
+def get_port_map() -> dict:
+    return dict(_PORT_MAP)
+
+
+def _assign_port(uuid: str) -> int:
+    global _NEXT_PORT
+    if uuid not in _PORT_MAP:
+        _PORT_MAP[uuid] = _NEXT_PORT
+        _NEXT_PORT += 1
+    return _PORT_MAP[uuid]
+
+
+def _is_allowed(link: dict) -> bool:
+    if not link.get("active", True):
+        return False
+    exp = link.get("expires_at")
+    if exp:
+        try:
+            if datetime.now() > datetime.fromisoformat(exp):
+                return False
+        except Exception:
+            pass
+    lb = link.get("limit_bytes", 0)
+    if lb > 0 and link.get("used_bytes", 0) >= lb:
+        return False
+    return True
+
+
+async def build_xray_config() -> dict:
+    async with LINKS_LOCK:
+        snapshot = dict(LINKS)
+
+    inbounds = []
+    for uuid, link in snapshot.items():
+        if not _is_allowed(link):
+            continue
+        port = link.get("xray_port") or _assign_port(uuid)
+        link["xray_port"] = port
+
+        try:
+            proto   = get_protocol(link.get("protocol", "vless"))
+            inbound = proto.get_xray_inbound(
+                port=port,
+                uuid=uuid,
+                password=link.get("secret", uuid),
+                stream=link.get("stream", "ws"),
+                tls=link.get("tls", True),
+                sni=link.get("sni", "") or "",
+                reality=link.get("reality", False),
+                reality_pbk=link.get("reality_pbk", ""),
+                reality_sid=link.get("reality_sid", ""),
+                reality_sni=link.get("reality_sni", ""),
+                reality_fingerprint=link.get("reality_fingerprint", "chrome"),
+                **link.get("stream_params", {}),
+            )
+            inbound["tag"] = f"in-{uuid[:8]}"
+            inbounds.append(inbound)
+        except Exception as e:
+            logger.warning(f"Skip inbound {uuid[:8]}: {e}")
+
+    if not inbounds:
+        inbounds = [{
+            "tag":      "placeholder",
+            "listen":   "127.0.0.1",
+            "port":     10000,
+            "protocol": "dokodemo-door",
+            "settings": {"address": "127.0.0.1", "port": 1, "network": "tcp"},
+        }]
+
     return {
-        "running":       is_running(),
-        "pid":           _process.pid if _process else None,
-        "uptime_secs":   int(time.time() - _start_time) if _start_time else 0,
-        "restart_count": _restart_count,
-        "bin":           XRAY_BIN,
-        "config":        XRAY_MAIN_CFG,
-        "bin_exists":    Path(XRAY_BIN).exists(),
+        "log": {"loglevel": "warning"},
+        "inbounds": inbounds,
+        "outbounds": [
+            {"protocol": "freedom",   "settings": {}, "tag": "direct"},
+            {"protocol": "blackhole", "settings": {"response": {"type": "none"}}, "tag": "block"},
+        ],
+        "routing": {
+            "domainStrategy": "IPIfNonMatch",
+            "rules": [
+                {"type": "field", "outboundTag": "block",
+                 "ip": ["geoip:private", "127.0.0.0/8"]},
+                {"type": "field", "outboundTag": "direct", "network": "tcp,udp"},
+            ],
+        },
     }
 
 
-async def start_xray() -> bool:
-    global _process, _start_time, _running
-
-    if not Path(XRAY_BIN).exists():
-        logger.error(f"❌ Xray binary not found: {XRAY_BIN}")
-        return False
-
-    await write_xray_config()
-
-    try:
-        _process = await asyncio.create_subprocess_exec(
-            XRAY_BIN, "run", "-c", XRAY_MAIN_CFG,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _start_time = time.time()
-        _running    = True
-        logger.info(f"🚀 Xray started — PID {_process.pid}")
-
-        # stderr رو در background بخون تا buffer پر نشه
-        stderr_lines: list[str] = []
-
-        async def _collect_stderr():
-            try:
-                async for line in _process.stderr:
-                    text = line.decode("utf-8", errors="replace").rstrip()
-                    if text:
-                        stderr_lines.append(text)
-            except Exception:
-                pass
-
-        stderr_task = asyncio.create_task(_collect_stderr())
-        await asyncio.sleep(3)
-
-        if _process.returncode is not None:
-            try:
-                await asyncio.wait_for(stderr_task, timeout=2.0)
-            except asyncio.TimeoutError:
-                stderr_task.cancel()
-
-            # ✅ لاگ کامل و واضح stderr
-            if stderr_lines:
-                logger.error("═══ Xray STDERR ══════════════════════")
-                for line in stderr_lines:
-                    logger.error(f"  {line}")
-                logger.error("══════════════════════════════════════")
-            else:
-                logger.error("(Xray stderr was empty)")
-
-            logger.error(f"❌ Xray crashed (rc={_process.returncode})")
-            return False
-
-        asyncio.create_task(_pipe_stdout(_process.stdout))
-        stderr_task.cancel()
-        asyncio.create_task(_pipe_stderr_bg(stderr_lines))
-
-        logger.info("✅ Xray is running")
-        return True
-
-    except Exception as e:
-        logger.error(f"❌ Failed to start Xray: {e}")
-        return False
-
-
-async def stop_xray() -> None:
-    global _process, _running
-    _running = False
-    if _process and _process.returncode is None:
-        try:
-            _process.send_signal(signal.SIGTERM)
-            await asyncio.wait_for(_process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            _process.kill()
-        except Exception:
-            pass
-    _process = None
-
-
-async def restart_xray() -> bool:
-    global _restart_count
-    logger.info("🔄 Restarting Xray...")
-    await stop_xray()
-    await asyncio.sleep(0.5)
-    ok = await start_xray()
-    if ok:
-        _restart_count += 1
-    return ok
-
-
-async def reload_xray() -> bool:
-    if not is_running():
-        return await restart_xray()
-    await write_xray_config()
-    try:
-        _process.send_signal(signal.SIGHUP)
-        logger.info("🔃 Xray reloaded (SIGHUP)")
-        return True
-    except Exception as e:
-        logger.warning(f"SIGHUP failed: {e} → restart")
-        return await restart_xray()
-
-
-async def monitor_loop() -> None:
-    global _running
-    consecutive = 0
-    while _running:
-        await asyncio.sleep(5)
-        if not _running:
-            break
-        if _process is None or _process.returncode is not None:
-            consecutive += 1
-            backoff = min(consecutive * 3, 45)
-            if backoff > 5:
-                logger.warning(f"⏳ Backoff {backoff}s...")
-                await asyncio.sleep(backoff)
-            ok = await start_xray()
-            if ok:
-                consecutive = 0
-        else:
-            consecutive = 0
-
-
-async def start_monitor() -> None:
-    global _monitor_task
-    ok = await start_xray()
-    # حتی اگه start نشد monitor رو شروع کن تا retry کنه
-    _monitor_task = asyncio.create_task(monitor_loop())
-
-
-async def stop_monitor() -> None:
-    global _running, _monitor_task
-    _running = False
-    if _monitor_task:
-        _monitor_task.cancel()
-        try:
-            await _monitor_task
-        except asyncio.CancelledError:
-            pass
-    await stop_xray()
-
-
-async def _pipe_stdout(stream) -> None:
-    try:
-        async for line in stream:
-            text = line.decode("utf-8", errors="replace").rstrip()
-            if text:
-                logger.info(f"[xray] {text}")
-    except Exception:
-        pass
-
-
-async def _pipe_stderr_bg(already_collected: list[str]) -> None:
-    for line in already_collected:
-        logger.warning(f"[xray/ERR] {line}")
-    if _process and _process.stderr:
-        try:
-            async for line in _process.stderr:
-                text = line.decode("utf-8", errors="replace").rstrip()
-                if text:
-                    logger.warning(f"[xray/ERR] {text}")
-        except Exception:
-            pass
+async def write_xray_config() -> str:
+    config   = await build_xray_config()
+    path     = Path(XRAY_MAIN_CFG)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    json_str = json.dumps(config, ensure_ascii=False, indent=2)
+    json.loads(json_str)  # validate
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json_str)
+    logger.info(f"✅ Config written — {len(config['inbounds'])} inbounds")
+    return str(path)
