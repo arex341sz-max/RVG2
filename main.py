@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from auth             import init_auth, is_valid_session, SESSION_COOKIE
-from config           import PORT, PUBLIC_DOMAIN
+from config           import PORT, PUBLIC_DOMAIN, XRAY_CERT_DIR, XRAY_CERT_FILE, XRAY_KEY_FILE
 from core.persistence import load_state, save_state
 from core.ws_relay    import handle_ws
 from link_manager     import (
@@ -44,33 +44,51 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
-# ── Routers ───────────────────────────────────────────────────────────────────
 for r in (auth_router, links_router, subs_router, xray_router, stats_router, sub_router):
     app.include_router(r)
 
-# ── HTTP client (برای proxy) ──────────────────────────────────────────────────
 _http: httpx.AsyncClient | None = None
 
-# ── Startup / Shutdown ────────────────────────────────────────────────────────
-def _ensure_self_signed_cert():
-    """ساخت self-signed cert برای Xray inbound TLS"""
-    import subprocess, os
-    cert_dir = "/data/certs"
-    cert_file = f"{cert_dir}/cert.pem"
-    key_file  = f"{cert_dir}/key.pem"
+
+def _ensure_self_signed_cert() -> bool:
+    """
+    ساخت self-signed cert برای Xray inbound TLS.
+    مسیر از config.py خونده میشه — نه hardcode.
+    True = cert آماده‌ست، False = شکست خورد.
+    """
+    import subprocess
+
+    cert_file = XRAY_CERT_FILE
+    key_file  = XRAY_KEY_FILE
+
     if os.path.exists(cert_file) and os.path.exists(key_file):
-        return
-    os.makedirs(cert_dir, exist_ok=True)
+        logger.info(f"🔐 Cert already exists → {XRAY_CERT_DIR}/")
+        return True
+
+    os.makedirs(XRAY_CERT_DIR, exist_ok=True)
     try:
-        subprocess.run([
-            "openssl", "req", "-x509", "-newkey", "rsa:2048",
-            "-keyout", key_file, "-out", cert_file,
-            "-days", "3650", "-nodes",
-            "-subj", "/CN=localhost"
-        ], check=True, capture_output=True)
-        logger.info("🔐 Self-signed cert generated → /data/certs/")
+        result = subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", key_file, "-out", cert_file,
+                "-days", "3650", "-nodes",
+                "-subj", "/CN=rvg-gateway"
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        logger.info(f"🔐 Self-signed cert generated → {XRAY_CERT_DIR}/")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ openssl failed (rc={e.returncode}): {e.stderr.strip()}")
+        return False
+    except FileNotFoundError:
+        logger.error("❌ openssl not found — install openssl in Dockerfile")
+        return False
     except Exception as e:
-        logger.warning(f"⚠️ Could not generate cert: {e} — TLS inbounds will be disabled")
+        logger.error(f"❌ Cert generation error: {e}")
+        return False
 
 
 @app.on_event("startup")
@@ -79,13 +97,14 @@ async def startup():
     init_auth()
     await load_state()
     await _ensure_default_link()
-    _ensure_self_signed_cert()
+
+    cert_ok = _ensure_self_signed_cert()
+    if not cert_ok:
+        logger.warning("⚠️ TLS cert missing — Xray TLS inbounds will fail!")
 
     limits = httpx.Limits(max_connections=500, max_keepalive_connections=100)
     _http  = httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(30, connect=10),
                                 follow_redirects=True)
-
-    # شروع Xray
     await start_monitor()
 
     logger.info(f"🚀 RVG Gateway v10 — port {PORT}")
@@ -100,7 +119,6 @@ async def shutdown():
         await _http.aclose()
 
 
-# ── Default link ──────────────────────────────────────────────────────────────
 async def _ensure_default_link():
     import hashlib
     from config import SECRET_KEY
@@ -131,13 +149,11 @@ async def _ensure_default_link():
             asyncio.create_task(save_state())
 
 
-# ── WebSocket relay (VLESS/WS مستقیم) ────────────────────────────────────────
 @app.websocket("/ws/{uuid}")
 async def websocket_endpoint(ws: WebSocket, uuid: str):
     await handle_ws(ws, uuid)
 
 
-# ── Protocols info ────────────────────────────────────────────────────────────
 @app.get("/api/protocols")
 async def api_protocols():
     return {"protocols": list_protocols()}
@@ -152,7 +168,6 @@ async def api_protocol_modes(name: str):
         raise HTTPException(404, "پروتکل پیدا نشد")
 
 
-# ── HTTP Proxy (ابزار کمکی) ───────────────────────────────────────────────────
 _HOP = {"connection","keep-alive","proxy-authenticate","proxy-authorization",
         "te","trailers","transfer-encoding","upgrade","content-encoding","content-length"}
 
@@ -177,7 +192,6 @@ async def http_proxy(target_url: str, request: Request):
         raise HTTPException(502, f"Proxy error: {exc}")
 
 
-# ── Pages ─────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {"service": "RVG Gateway", "version": "10.0", "status": "active",
@@ -203,6 +217,5 @@ async def public_page(uuid_key: str):
     return HTMLResponse(content=get_html(uuid_key))
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=PORT, log_level="info", workers=1)
