@@ -19,7 +19,7 @@ class VLESSProtocol(BaseProtocol):
             "icon": "ti-webhook",
             "desc": "عبور از فایروال با هدر HTTP",
             "params": [
-                {"key": "path", "label": "مسیر", "placeholder": "/ws",          "default": "/ws"},
+                {"key": "path", "label": "مسیر", "placeholder": "/ws/{uuid}", "default": "/ws"},
                 {"key": "host", "label": "Host",  "placeholder": "example.com",  "default": ""},
             ],
         },
@@ -93,6 +93,13 @@ class VLESSProtocol(BaseProtocol):
             val = sp.get(key, pdef.get("default", ""))
             if val is not None and val != "" and val is not False:
                 p[key] = "true" if (isinstance(val, bool) and val) else str(val)
+
+        # ✅ FIX: اگه ws و path پیش‌فرضه، UUID رو اضافه کن
+        if stream == "ws":
+            current_path = p.get("path", "/ws")
+            if current_path in ("/ws", "") and uuid:
+                p["path"] = f"/ws/{uuid}"
+
         if stream in ("ws", "httpupgrade", "xhttp") and not sp.get("host"):
             p["host"] = host
 
@@ -104,24 +111,31 @@ class VLESSProtocol(BaseProtocol):
         stream = kw.pop("stream", "ws")
         tls    = kw.pop("tls", True)
         return {
-            "listen":   "0.0.0.0",  # ✅ FIXED: Changed from 127.0.0.1 to 0.0.0.0
+            "listen":   "0.0.0.0",
             "port":     port,
             "protocol": "vless",
             "settings": {
                 "clients":    [{"id": uuid, "flow": ""}],
                 "decryption": "none",
             },
-            "streamSettings": self._build_stream(stream, tls, **kw),
+            "streamSettings": self._build_stream(stream, tls, uuid=uuid, **kw),
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         }
 
     def _build_stream(self, stream: str, tls: bool, **kw) -> dict:
+        uuid = kw.get("uuid", "")
         ss: dict = {"network": stream}
 
         if stream == "tcp":
             ss["tcpSettings"] = {"header": {"type": "none"}}
         elif stream == "ws":
-            ws_s: dict = {"path": kw.get("path", "/ws")}
+            # ✅ FIX: path رو /ws/{uuid} بساز مگه اینکه user صراحتاً path دیگه‌ای داده باشه
+            raw_path = kw.get("path", "/ws")
+            if raw_path in ("/ws", "") and uuid:
+                ws_path = f"/ws/{uuid}"
+            else:
+                ws_path = raw_path
+            ws_s: dict = {"path": ws_path}
             if kw.get("host"):
                 ws_s["headers"] = {"Host": kw["host"]}
             ss["wsSettings"] = ws_s
