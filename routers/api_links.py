@@ -1,4 +1,4 @@
-"""routers/api_links.py — CRUD کامل لینک‌ها"""
+"""routers/api_links.py — CRUD کامل لینک‌ها با بهبودی‌های امنیتی"""
 import asyncio
 from datetime import datetime, timedelta
 
@@ -22,6 +22,16 @@ router = APIRouter()
 
 def _host() -> str:
     return os.environ.get("RAILWAY_PUBLIC_DOMAIN", PUBLIC_DOMAIN)
+
+
+def _check_port_conflict(new_port: int, exclude_uuid: str = None) -> bool:
+    """بررسی اینکه پورت قبلاً در استفاده است یا نه"""
+    for uid, link in LINKS.items():
+        if exclude_uuid and uid == exclude_uuid:
+            continue
+        if link.get("port") == new_port:
+            return True
+    return False
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
@@ -65,6 +75,12 @@ async def create_link(request: Request, _=Depends(require_auth)):
         elif protocol == "wireguard": port = 51820
         elif tls: port = 443
         else: port = 80
+
+    # ✅ FIXED: بررسی تکراری نبودن پورت
+    async with LINKS_LOCK:
+        if _check_port_conflict(port):
+            raise HTTPException(400, 
+                f"❌ پورت {port} قبلاً در استفاده است. لطفاً پورت دیگری انتخاب کنید")
 
     uid    = generate_uuid()
     secret = generate_secret(protocol)
@@ -185,7 +201,12 @@ async def update_link(uid: str, request: Request, _=Depends(require_auth)):
             link["stream_params"] = body["stream_params"]
 
         if "port" in body:
-            link["port"] = int(body["port"])
+            # ✅ FIXED: بررسی پورت جدید برای conflict
+            new_port = int(body["port"])
+            if _check_port_conflict(new_port, exclude_uuid=uid):
+                raise HTTPException(400, 
+                    f"❌ پورت {new_port} قبلاً در استفاده است. لطفاً پورت دیگری انتخاب کنید")
+            link["port"] = new_port
 
         new_sub = body.get("sub_id", "UNCHANGED")
         if new_sub != "UNCHANGED":
@@ -226,3 +247,66 @@ async def delete_link(uid: str, _=Depends(require_auth)):
     asyncio.create_task(reload_xray())
     asyncio.create_task(save_state())
     return {"ok": True, "deleted": uid}
+
+
+# ── Clone/Duplicate ──────────────────────────────────────────────────────────
+@router.post("/api/links/{uid}/clone")
+async def clone_link(uid: str, _=Depends(require_auth)):
+    """✅ کپی/کلون کردن یک کانفیگ موجود"""
+    async with LINKS_LOCK:
+        if uid not in LINKS:
+            raise HTTPException(404, "کانفیگ پیدا نشد")
+        
+        original = LINKS[uid]
+        
+        # پورت جدید را پیدا کن
+        new_port = original.get("port", 443)
+        port_attempts = 0
+        while _check_port_conflict(new_port) and port_attempts < 100:
+            new_port += 1
+            port_attempts += 1
+        
+        if port_attempts >= 100:
+            raise HTTPException(500, "نمی‌توان پورت مناسب پیدا کرد")
+        
+        # UUID و Secret جدید
+        new_uid = generate_uuid()
+        new_secret = generate_secret(original.get("protocol", "vless"))
+        
+        # کپی کردن تمام فیلدها
+        new_link = {
+            **original,
+            "uuid": new_uid,
+            "secret": new_secret,
+            "port": new_port,
+            "label": f"{original.get('label', 'لینک')} (کپی)",
+            "created_at": datetime.now().isoformat(),
+            "used_bytes": 0,  # شمارنده استفاده را ریست کن
+            "is_default": False,
+            "xray_port": None,  # بعد تعیین می‌شود
+        }
+        
+        LINKS[new_uid] = new_link
+        
+        # اگر subscription دارد، آن را هم اپدیت کن
+        sub_id = original.get("sub_id")
+        if sub_id:
+            async with SUBS_LOCK:
+                if sub_id in SUBS:
+                    ids = SUBS[sub_id].setdefault("link_ids", [])
+                    if new_uid not in ids:
+                        ids.append(new_uid)
+    
+    asyncio.create_task(reload_xray())
+    asyncio.create_task(save_state())
+    
+    host = _host()
+    link_url = generate_link_url(new_link, host)
+    return {
+        "uuid": new_uid,
+        **new_link,
+        "expired": False,
+        "link_url": link_url,
+        "sub_url": f"https://{host}/sub/{new_uid}",
+        "message": f"✅ کانفیگ با موفقیت کپی شد - پورت تخصیص‌داده‌شده: {new_port}",
+    }
